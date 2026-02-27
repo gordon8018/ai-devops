@@ -1,4 +1,8 @@
 repos/
+.clawdbot/
+.venv/
+tasks/
+worktrees/
 .env
 .env.*
 *.env

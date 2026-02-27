@@ -16,6 +16,7 @@ The current implementation focuses on:
 
 - structured task planning
 - prompt compilation per subtask
+- phased multi-subtask planning for implementation, validation, and docs work
 - dependency-aware dispatch
 - compatibility with the existing queue/daemon/monitor flow
 

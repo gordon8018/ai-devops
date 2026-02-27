@@ -2,6 +2,8 @@
 
 `zoe_planner.py` upgrades Zoe from a template prompt writer into a task planner plus prompt compiler. It accepts a high-level task, lets Zoe act as the planning agent, validates the generated plan, archives the plan, and dispatches runnable subtasks into the existing queue.
 
+The current planner engine uses a phased splitter. For code changes it usually emits a sequential chain such as implementation foundation -> primary implementation -> validation -> docs, while simpler tasks collapse to fewer subtasks. Pure documentation or analysis requests stay conservative instead of inventing empty code work. Each phase now gets a narrower `filesHint` subset so implementation, tests, and docs do not all point at the same paths.
+
 ## Files
 
 - `orchestrator/bin/zoe_planner.py`: CLI entrypoint for planning and dispatch.
