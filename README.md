@@ -1,13 +1,14 @@
 # AI DevOps
 
-Zoe orchestration for planning, dispatching, and running coding agents against local Git worktrees.
+Zoe tool layer for planning, dispatching, and running coding agents against local Git worktrees.
 
 ## What This Repo Does
 
-This repository contains a minimal multi-agent control plane centered on Zoe:
+This repository contains the fixed workflow layer behind Zoe:
 
-- Discord users submit high-level engineering tasks with `/task`
-- Zoe receives the task and acts as the planning agent, producing a validated execution plan
+- Zoe, as an OpenClaw agent, can decide which local tool to call
+- This repo provides deterministic tools for planning, validation, dispatch, execution, and monitoring
+- A local `discord.py` bot still exists as an optional control adapter for development and fallback operations
 - The dispatcher archives the plan and writes runnable subtasks into the local queue
 - `zoe-daemon` consumes queue items, creates Git worktrees, writes prompts, and starts agents with `tmux` when available or a detached local process otherwise
 - `monitor` watches active tasks, PR status, and CI, and can trigger retry loops when CI fails
@@ -24,57 +25,64 @@ The current implementation focuses on:
 
 ```mermaid
 flowchart TD
-    U[Discord User] --> B[discord/bot.py<br/>Zoe's Discord entrypoint]
+    U[Discord User] --> DC[Discord Channel]
+    DC --> OC[OpenClaw Runtime]
+    OC --> Z[Zoe Agent<br/>AI decision layer]
 
-    B --> C{Allowlist / Repo validation}
-    C -->|deny| R1[Reject request in Discord]
-    C -->|allow| P[orchestrator/bin/zoe_planner.py<br/>Planner CLI]
+    Z --> T1[plan_task]
+    Z --> T2[dispatch_plan]
+    Z --> T3[task_status / list_plans]
+    Z --> T4[retry_task]
 
-    P --> E[orchestrator/bin/planner_engine.py<br/>Zoe internal planner]
-    E --> S[orchestrator/bin/plan_schema.py<br/>Strict plan validation]
-    S --> T[tasks/<planId>/plan.json<br/>tasks/<planId>/subtasks/*.json]
+    subgraph ToolLayer["This repo: fixed workflow / tool layer"]
+        T1 --> P[orchestrator/bin/zoe_tools.py]
+        P --> E[planner_engine.py]
+        P --> S[plan_schema.py]
+        S --> T[tasks/<planId>/plan.json<br/>tasks/<planId>/subtasks/*.json]
 
-    S --> D[orchestrator/bin/dispatch.py<br/>Dependency-aware dispatcher]
-    D --> Q[orchestrator/queue/*.json]
+        T2 --> D[dispatch.py]
+        D --> Q[orchestrator/queue/*.json]
 
-    Q --> Z[orchestrator/bin/zoe-daemon.py<br/>Queue consumer]
-    Z --> W[worktrees/<task-or-plan-branch>/]
-    Z --> PR[prompt.txt]
-    Z --> A[agents/run-codex-agent.sh]
+        Q --> ZD[zoe-daemon.py]
+        ZD --> W[worktrees/]
+        ZD --> PR[prompt.txt]
+        ZD --> A[agents/run-codex-agent.sh]
 
-    A --> X{tmux available?}
-    X -->|yes| TM[tmux session]
-    X -->|no| BG[detached local process]
+        A --> X{tmux available?}
+        X -->|yes| TM[tmux session]
+        X -->|no| BG[detached local process]
 
-    TM --> REG[.clawdbot/active-tasks.json]
-    BG --> REG
+        TM --> REG[.clawdbot/active-tasks.json]
+        BG --> REG
 
-    REG --> M[orchestrator/bin/monitor.py<br/>Task / PR / CI monitor]
-    M --> N[Discord webhook / notifications]
-    M --> RL[Ralph Loop v2<br/>retry with prompt.retryN.txt]
-    RL --> A
+        T3 --> REG
+        T4 --> M[monitor.py]
+        M --> REG
+    end
+
+    Z --> API[orchestrator/bin/zoe_tool_api.py<br/>JSON I/O tool adapter]
+    API -. invokes .-> P
+
+    B[discord/bot.py<br/>optional control adapter] -. local / dev only .-> P
 ```
 
 Simplified execution path:
 
 ```text
-Discord /task
-  -> discord/bot.py
-  -> orchestrator/bin/zoe_planner.py
-  -> orchestrator/bin/planner_engine.py
-  -> orchestrator/bin/plan_schema.py
-  -> orchestrator/bin/dispatch.py
+Discord -> OpenClaw -> Zoe agent
+  -> zoe_tools.py
+  -> planner_engine.py / plan_schema.py / dispatch.py
   -> orchestrator/queue/*.json
-  -> orchestrator/bin/zoe-daemon.py
-  -> agents/run-codex-agent.sh
-  -> .clawdbot/active-tasks.json
-  -> orchestrator/bin/monitor.py
+  -> zoe-daemon.py
+  -> run-codex-agent.sh
+  -> active-tasks.json
+  -> monitor.py
 ```
 
 ## Key Directories
 
-- `discord/`: Discord bot entrypoint and local bot env file
-- `orchestrator/bin/`: planner, adapter, schema validation, daemon, monitor, and dispatch logic
+- `discord/`: optional local control adapter and bot env file
+- `orchestrator/bin/`: tool layer, schema validation, daemon, monitor, and dispatch logic
 - `orchestrator/queue/`: pending execution tasks consumed by `zoe-daemon`
 - `tasks/`: archived plans and subtask snapshots under `tasks/<planId>/`
 - `worktrees/`: per-task or shared plan worktrees
@@ -86,8 +94,11 @@ Discord /task
 
 ## Important Files
 
-- `discord/bot.py`: Slash commands, allowlist enforcement, planner invocation, fallback queue behavior
-- `orchestrator/bin/zoe_planner.py`: CLI entrypoint for `plan`, `dispatch`, and `plan-and-dispatch`
+- `discord/bot.py`: optional local control adapter that calls the same tool layer used by Zoe
+- `orchestrator/bin/zoe_tools.py`: unified Python tool layer for planning, dispatch, and status operations
+- `orchestrator/bin/zoe_tool_contract.py`: machine-readable tool contracts for Zoe's agent-facing API
+- `orchestrator/bin/zoe_tool_api.py`: JSON I/O adapter for agent tool calls
+- `orchestrator/bin/zoe_planner.py`: compatibility CLI wrapper around `zoe_tools.py`
 - `orchestrator/bin/planner_engine.py`: Zoe's internal planning engine
 - `orchestrator/bin/plan_schema.py`: strict validation for plan JSON, subtask inheritance, DAG checks, and prompt limits
 - `orchestrator/bin/dispatch.py`: queue payload generation and dependency-gated dispatch
@@ -98,9 +109,9 @@ Discord /task
 
 ## Planner Flow
 
-When a user runs `/task`, the system now does this:
+When Zoe decides to plan work, the tool layer does this:
 
-1. validates the Discord user against the allowlist
+1. accepts a normalized planning request from Zoe or an optional local control adapter
 2. builds a normalized planning request
 3. lets Zoe plan the work inside the orchestrator
 4. validates the returned plan before accepting it
@@ -108,9 +119,9 @@ When a user runs `/task`, the system now does this:
    - `tasks/<planId>/plan.json`
    - `tasks/<planId>/subtasks/<subtaskId>.json`
 6. dispatches the first runnable subtasks into `orchestrator/queue/`
-7. replies in Discord with the `planId` and subtask summary
+7. returns structured data that Zoe can turn into a final reply or follow-up action
 
-If planning fails, the bot falls back to a single queue task and marks it with `metadata.plannedBy = "fallback"`.
+If planning fails through the optional local Discord adapter, that adapter falls back to a single queue task and marks it with `metadata.plannedBy = "fallback"`.
 
 ## Queue and Execution Model
 
@@ -151,6 +162,19 @@ Core environment variables:
 
 ## Local Usage
 
+Agent-facing JSON schema:
+
+```bash
+./.venv/bin/python orchestrator/bin/zoe_tool_api.py schema --pretty
+```
+
+Agent-facing tool invocation:
+
+```bash
+printf '%s\n' '{"tool":"list_plans","args":{"limit":3}}' | \
+  ./.venv/bin/python orchestrator/bin/zoe_tool_api.py invoke
+```
+
 Run the planner directly:
 
 ```bash
@@ -179,7 +203,7 @@ Current test coverage includes:
 ## Notes
 
 - `monitor.py` is still responsible for CI-triggered retry handling
-- Zoe currently plans internally inside the orchestrator instead of calling an external planner service
+- Zoe is expected to act as the AI decision layer in OpenClaw; this repo is the deterministic tool layer Zoe calls
 - `pydantic` is not currently used in this repo; validation is implemented in typed Python code in `plan_schema.py`
 - `agents/run-codex-agent.sh` now provisions its own PTY via `script`, so Codex can run under `tmux` or without it
 

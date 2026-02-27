@@ -1,22 +1,25 @@
 import json
 import os
-import subprocess
-import sys
-import tempfile
 import time
 from pathlib import Path
 import re
+import sys
 
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 BASE_DIR = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
 QUEUE_DIR = BASE_DIR / "orchestrator" / "queue"
 REPOS_DIR = BASE_DIR / "repos"
-PLANNER_BIN = ROOT_DIR / "orchestrator" / "bin" / "zoe_planner.py"
 QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+
+from orchestrator.bin.errors import PlannerError, PolicyViolation
+from orchestrator.bin.zoe_tools import list_plans, plan_and_dispatch_task, task_status
 
 env_path = Path(__file__).parent / ".env"
 load_dotenv(env_path, override=True)
@@ -37,6 +40,10 @@ class PlannerInvocationError(Exception):
 
 
 class PlannerPolicyViolation(PlannerInvocationError):
+    pass
+
+
+class PlannerExecutionError(PlannerInvocationError):
     pass
 
 
@@ -127,31 +134,12 @@ def write_fallback_task(payload: dict) -> str:
 
 
 def invoke_planner(payload: dict) -> dict:
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-        task_file = Path(handle.name)
-
     try:
-        completed = subprocess.run(
-            [sys.executable, str(PLANNER_BIN), "plan-and-dispatch", "--task-file", str(task_file)],
-            cwd=str(ROOT_DIR),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    finally:
-        task_file.unlink(missing_ok=True)
-
-    if completed.returncode == 0:
-        try:
-            return json.loads(completed.stdout)
-        except json.JSONDecodeError as exc:
-            raise PlannerInvocationError("zoe_planner returned invalid JSON") from exc
-
-    stderr = (completed.stderr or "").strip()
-    if stderr.startswith("POLICY_VIOLATION:"):
-        raise PlannerPolicyViolation(stderr)
-    raise PlannerInvocationError(stderr or "zoe_planner failed")
+        return plan_and_dispatch_task(payload, base_dir=BASE_DIR).to_dict()
+    except PolicyViolation as exc:
+        raise PlannerPolicyViolation(str(exc)) from exc
+    except PlannerError as exc:
+        raise PlannerExecutionError(str(exc)) from exc
 
 @client.event
 async def on_ready():
@@ -165,7 +153,7 @@ async def on_ready():
 
     channel = client.get_channel(CHANNEL_ID) if CHANNEL_ID else None
     if channel:
-        await channel.send("Zoe control plane online. Use /status or /task")
+        await channel.send("Zoe control adapter online. Use /status, /task, /plans, or /task_status")
     print(
         f"[BOOT] allowed_users={sorted(allowed_users())} allowed_roles={sorted(allowed_role_ids())}"
     )
@@ -173,7 +161,68 @@ async def on_ready():
 
 @tree.command(name="status", description="Check orchestrator status")
 async def status(interaction: discord.Interaction):
-    await interaction.response.send_message("Zoe orchestrator alive ✅", ephemeral=True)
+    registry = task_status(base_dir=BASE_DIR)
+    await interaction.response.send_message(
+        f"Zoe tool layer alive. tracked tasks: {len(registry.get('tasks', []))}",
+        ephemeral=True,
+    )
+
+
+@tree.command(name="plans", description="List recent archived Zoe plans")
+@app_commands.describe(limit="How many recent plans to show")
+async def plans(interaction: discord.Interaction, limit: int = 5):
+    result = list_plans(base_dir=BASE_DIR, limit=max(1, min(limit, 20)))
+    plans_payload = result.get("plans", [])
+    if not plans_payload:
+        await interaction.response.send_message("No archived plans found.", ephemeral=True)
+        return
+
+    lines = ["Recent plans:"]
+    lines.extend(
+        f"- `{item['planId']}` {item['title']} ({item['subtaskCount']} subtasks)"
+        for item in plans_payload
+    )
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
+@tree.command(name="task_status", description="Read task or plan status from the local registry")
+@app_commands.describe(task_id="Execution task id", plan_id="Plan id")
+async def task_status_command(
+    interaction: discord.Interaction,
+    task_id: str | None = None,
+    plan_id: str | None = None,
+):
+    try:
+        result = task_status(task_id=task_id, plan_id=plan_id, base_dir=BASE_DIR)
+    except PlannerError as exc:
+        await interaction.response.send_message(str(exc), ephemeral=True)
+        return
+
+    if "task" in result:
+        task_payload = result["task"]
+        await interaction.response.send_message(
+            f"task `{task_payload.get('id')}` status: `{task_payload.get('status')}`",
+            ephemeral=True,
+        )
+        return
+
+    tasks = result.get("tasks", [])
+    if plan_id:
+        if not tasks:
+            await interaction.response.send_message(
+                f"No registry tasks found yet for plan `{plan_id}`.",
+                ephemeral=True,
+            )
+            return
+        lines = [f"Plan `{plan_id}` tasks:"]
+        lines.extend(f"- `{item.get('id')}` [{item.get('status')}]" for item in tasks[:10])
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+        return
+
+    await interaction.response.send_message(
+        f"Tracked tasks: {len(tasks)}",
+        ephemeral=True,
+    )
 
 @tree.command(name="task", description="Plan and queue a coding task")
 @app_commands.describe(
