@@ -74,7 +74,7 @@ def test_dispatch_generates_queue_json_and_expected_fields(tmp_path) -> None:
     assert payload["effort"] == "high"
     assert payload["metadata"]["planId"] == plan.plan_id
     assert payload["metadata"]["subtaskId"] == "S1"
-    assert payload["metadata"]["plannedBy"] == "openclaw"
+    assert payload["metadata"]["plannedBy"] == "zoe"
 
 
 def test_topological_sort_and_dependency_dispatch(tmp_path) -> None:

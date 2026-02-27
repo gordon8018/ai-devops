@@ -13,8 +13,8 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from orchestrator.bin.dispatch import archive_subtasks, default_base_dir, dispatch_plan_file, plan_dir
-from orchestrator.bin.errors import InvalidPlan, OpenClawDown, PlannerError, PolicyViolation
-from orchestrator.bin.openclaw_adapter import OpenClawAdapter
+from orchestrator.bin.errors import InvalidPlan, PlannerError, PolicyViolation
+from orchestrator.bin.planner_engine import ZoePlannerEngine
 from orchestrator.bin.plan_schema import Plan, sanitize_identifier
 
 SCHEMA_VERSION = "1.0"
@@ -120,10 +120,10 @@ def save_plan(plan: Plan, *, base_dir: Path | None = None) -> Path:
 def plan_task(
     task_input: dict[str, Any],
     *,
-    adapter: OpenClawAdapter | None = None,
+    engine: ZoePlannerEngine | None = None,
     base_dir: Path | None = None,
 ) -> tuple[Plan, Path]:
-    planner = adapter or OpenClawAdapter()
+    planner = engine or ZoePlannerEngine()
     request_payload = build_plan_request(task_input)
     plan = planner.plan(request_payload)
     plan_path = save_plan(plan, base_dir=base_dir)
@@ -213,9 +213,6 @@ def main() -> int:
                 }
             )
             return 0
-    except OpenClawDown as exc:
-        print(f"OPENCLAW_DOWN: {exc}", file=sys.stderr)
-        return 2
     except PolicyViolation as exc:
         print(f"POLICY_VIOLATION: {exc}", file=sys.stderr)
         return 3

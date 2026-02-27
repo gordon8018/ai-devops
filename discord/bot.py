@@ -14,23 +14,17 @@ from dotenv import load_dotenv
 ROOT_DIR = Path(__file__).resolve().parents[1]
 BASE_DIR = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
 QUEUE_DIR = BASE_DIR / "orchestrator" / "queue"
+REPOS_DIR = BASE_DIR / "repos"
 PLANNER_BIN = ROOT_DIR / "orchestrator" / "bin" / "zoe_planner.py"
 QUEUE_DIR.mkdir(parents=True, exist_ok=True)
 
 env_path = Path(__file__).parent / ".env"
-load_dotenv(env_path)
+load_dotenv(env_path, override=True)
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = os.getenv("DISCORD_GUILD_ID")  # 推荐填，能更快同步命令；不填也能用但会慢
 CHANNEL_ID_RAW = os.getenv("DISCORD_CHANNEL")
 CHANNEL_ID = int(CHANNEL_ID_RAW) if CHANNEL_ID_RAW else None
-ALLOWED_USERS = {
-    item.strip() for item in os.getenv("DISCORD_ALLOWED_USERS", "").split(",") if item.strip()
-}
-ALLOWED_ROLE_IDS = {
-    int(item.strip()) for item in os.getenv("DISCORD_ALLOWED_ROLE_IDS", "").split(",") if item.strip()
-}
-
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN missing")
 
@@ -39,10 +33,6 @@ client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
 class PlannerInvocationError(Exception):
-    pass
-
-
-class OpenClawUnavailable(PlannerInvocationError):
     pass
 
 
@@ -63,17 +53,57 @@ def sanitize_identifier(value: str) -> str:
     return sanitized or "task"
 
 
+def allowed_users() -> set[str]:
+    return {
+        item.strip() for item in os.getenv("DISCORD_ALLOWED_USERS", "").split(",") if item.strip()
+    }
+
+
+def allowed_role_ids() -> set[int]:
+    values: set[int] = set()
+    for item in os.getenv("DISCORD_ALLOWED_ROLE_IDS", "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            values.add(int(item))
+        except ValueError:
+            continue
+    return values
+
+
 def is_allowed(interaction: discord.Interaction) -> bool:
-    if not ALLOWED_USERS and not ALLOWED_ROLE_IDS:
+    configured_users = allowed_users()
+    configured_roles = allowed_role_ids()
+    if not configured_users and not configured_roles:
+        print(
+            f"[ALLOWLIST] deny user_id={interaction.user.id} user={interaction.user} "
+            "reason=no_allowlist_configured"
+        )
         return False
 
     user_id = str(interaction.user.id)
     username = str(interaction.user)
-    if user_id in ALLOWED_USERS or username in ALLOWED_USERS:
+    if user_id in configured_users or username in configured_users:
+        print(
+            f"[ALLOWLIST] allow user_id={interaction.user.id} user={interaction.user} "
+            f"configured_users={sorted(configured_users)} configured_roles={sorted(configured_roles)}"
+        )
         return True
 
     roles = getattr(interaction.user, "roles", [])
-    return any(getattr(role, "id", None) in ALLOWED_ROLE_IDS for role in roles)
+    role_ids = [getattr(role, "id", None) for role in roles]
+    allowed = any(role_id in configured_roles for role_id in role_ids)
+    print(
+        f"[ALLOWLIST] {'allow' if allowed else 'deny'} user_id={interaction.user.id} user={interaction.user} "
+        f"configured_users={sorted(configured_users)} configured_roles={sorted(configured_roles)} "
+        f"user_roles={role_ids}"
+    )
+    return allowed
+
+
+def repo_exists(repo: str) -> bool:
+    return (REPOS_DIR / repo).exists()
 
 
 def write_fallback_task(payload: dict) -> str:
@@ -90,7 +120,7 @@ def write_fallback_task(payload: dict) -> str:
         "requested_at": payload["requested_at"],
         "metadata": {
             "plannedBy": "fallback",
-            "fallbackReason": "openclaw_unavailable",
+            "fallbackReason": "planner_failed",
         },
     }
     return put_task(execution_task)
@@ -119,8 +149,6 @@ def invoke_planner(payload: dict) -> dict:
             raise PlannerInvocationError("zoe_planner returned invalid JSON") from exc
 
     stderr = (completed.stderr or "").strip()
-    if stderr.startswith("OPENCLAW_DOWN:"):
-        raise OpenClawUnavailable(stderr)
     if stderr.startswith("POLICY_VIOLATION:"):
         raise PlannerPolicyViolation(stderr)
     raise PlannerInvocationError(stderr or "zoe_planner failed")
@@ -138,6 +166,9 @@ async def on_ready():
     channel = client.get_channel(CHANNEL_ID) if CHANNEL_ID else None
     if channel:
         await channel.send("Zoe control plane online. Use /status or /task")
+    print(
+        f"[BOOT] allowed_users={sorted(allowed_users())} allowed_roles={sorted(allowed_role_ids())}"
+    )
     print(f"Logged in as {client.user}")
 
 @tree.command(name="status", description="Check orchestrator status")
@@ -164,7 +195,14 @@ async def task(
 ):
     if not is_allowed(interaction):
         await interaction.response.send_message(
-            "Task creation is not allowed for this user.",
+            f"Task creation is not allowed for this user. userId={interaction.user.id}",
+            ephemeral=True,
+        )
+        return
+
+    if not repo_exists(repo):
+        await interaction.response.send_message(
+            f"Repository not found: `{repo}`. Expected directory: `{REPOS_DIR / repo}`",
             ephemeral=True,
         )
         return
@@ -199,19 +237,15 @@ async def task(
         await interaction.response.send_message("\n".join(lines), ephemeral=False)
     except PlannerPolicyViolation as exc:
         await interaction.response.send_message(str(exc), ephemeral=True)
-    except OpenClawUnavailable:
+    except PlannerInvocationError as exc:
         queue_path = write_fallback_task(payload)
         await interaction.response.send_message(
-            "Task planned via fallback because OpenClaw is unavailable.\n"
+            "Planner failed, so the task was queued as a single fallback execution task.\n"
             f"repo: `{repo}`\n"
             f"title: `{title}`\n"
-            f"queue: `{Path(queue_path).name}`",
+            f"queue: `{Path(queue_path).name}`\n"
+            f"error: `{exc}`",
             ephemeral=False,
-        )
-    except PlannerInvocationError as exc:
-        await interaction.response.send_message(
-            f"Planner failed: `{exc}`",
-            ephemeral=True,
         )
 
 client.run(TOKEN)

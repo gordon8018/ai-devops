@@ -79,7 +79,7 @@ def topologically_sorted_subtask_ids(plan: Plan) -> list[str]:
     return [subtask.id for subtask in plan.topologically_sorted_subtasks()]
 
 
-def build_execution_task(plan: Plan, subtask: Subtask, planned_by: str = "openclaw") -> dict[str, Any]:
+def build_execution_task(plan: Plan, subtask: Subtask, planned_by: str = "zoe") -> dict[str, Any]:
     return {
         "id": execution_task_id(plan, subtask),
         "repo": plan.repo,

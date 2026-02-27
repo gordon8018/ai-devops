@@ -4,7 +4,7 @@ from pathlib import Path
 def compile_prompt(task: dict, repo_root: Path) -> str:
     """
     MVP: 先用模板 prompt 跑通。
-    后续：你把这里替换成“调用 OpenClaw 生成 prompt（含业务上下文）”
+    后续：如果 Zoe planner 没有提供 prompt，再在这里补更强的本地编译逻辑。
     """
     title = task["title"]
     desc = task["description"]

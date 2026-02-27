@@ -1,15 +1,15 @@
 # AI DevOps
 
-OpenClaw-backed Zoe orchestration for planning, dispatching, and running coding agents against local Git worktrees.
+Zoe orchestration for planning, dispatching, and running coding agents against local Git worktrees.
 
 ## What This Repo Does
 
 This repository contains a minimal multi-agent control plane centered on Zoe:
 
 - Discord users submit high-level engineering tasks with `/task`
-- Zoe Planner asks OpenClaw to turn that task into a validated execution plan
+- Zoe receives the task and acts as the planning agent, producing a validated execution plan
 - The dispatcher archives the plan and writes runnable subtasks into the local queue
-- `zoe-daemon` consumes queue items, creates Git worktrees, writes prompts, and starts agents in `tmux`
+- `zoe-daemon` consumes queue items, creates Git worktrees, writes prompts, and starts agents with `tmux` when available or a detached local process otherwise
 - `monitor` watches active tasks, PR status, and CI, and can trigger retry loops when CI fails
 
 The current implementation focuses on:
@@ -25,7 +25,7 @@ The current implementation focuses on:
 Discord /task
   -> discord/bot.py
   -> orchestrator/bin/zoe_planner.py
-  -> orchestrator/bin/openclaw_adapter.py
+  -> orchestrator/bin/planner_engine.py
   -> orchestrator/bin/plan_schema.py
   -> orchestrator/bin/dispatch.py
   -> orchestrator/queue/*.json
@@ -52,7 +52,7 @@ Discord /task
 
 - `discord/bot.py`: Slash commands, allowlist enforcement, planner invocation, fallback queue behavior
 - `orchestrator/bin/zoe_planner.py`: CLI entrypoint for `plan`, `dispatch`, and `plan-and-dispatch`
-- `orchestrator/bin/openclaw_adapter.py`: OpenClaw HTTP webhook integration with timeout and error handling
+- `orchestrator/bin/planner_engine.py`: Zoe's internal planning engine
 - `orchestrator/bin/plan_schema.py`: strict validation for plan JSON, subtask inheritance, DAG checks, and prompt limits
 - `orchestrator/bin/dispatch.py`: queue payload generation and dependency-gated dispatch
 - `orchestrator/bin/zoe-daemon.py`: queue consumer, worktree manager, prompt writer, and agent spawner
@@ -66,7 +66,7 @@ When a user runs `/task`, the system now does this:
 
 1. validates the Discord user against the allowlist
 2. builds a normalized planning request
-3. calls OpenClaw over HTTP webhook
+3. lets Zoe plan the work inside the orchestrator
 4. validates the returned plan before accepting it
 5. writes:
    - `tasks/<planId>/plan.json`
@@ -74,7 +74,7 @@ When a user runs `/task`, the system now does this:
 6. dispatches the first runnable subtasks into `orchestrator/queue/`
 7. replies in Discord with the `planId` and subtask summary
 
-If OpenClaw is unavailable, the bot falls back to a single queue task and marks it with `metadata.plannedBy = "fallback"`.
+If planning fails, the bot falls back to a single queue task and marks it with `metadata.plannedBy = "fallback"`.
 
 ## Queue and Execution Model
 
@@ -108,15 +108,10 @@ Core environment variables:
 - `DISCORD_CHANNEL`
 - `DISCORD_ALLOWED_USERS`
 - `DISCORD_ALLOWED_ROLE_IDS`
-- `OPENCLAW_WEBHOOK_URL`
-- `OPENCLAW_WEBHOOK_TOKEN`
-- `OPENCLAW_TIMEOUT_SEC`
-- `OPENCLAW_CLI_BIN`
 - `AI_DEVOPS_HOME`
 - `CODEX_RUNNER_PATH`
 - `CLAUDE_RUNNER_PATH`
-
-OpenClaw webhook/token values are never written into logs by the planner code.
+- `CODEX_BIN`
 
 ## Local Usage
 
@@ -148,8 +143,9 @@ Current test coverage includes:
 ## Notes
 
 - `monitor.py` is still responsible for CI-triggered retry handling
-- the OpenClaw adapter already reserves an interface for future failure-context prompt rewrites
+- Zoe currently plans internally inside the orchestrator instead of calling an external planner service
 - `pydantic` is not currently used in this repo; validation is implemented in typed Python code in `plan_schema.py`
+- `agents/run-codex-agent.sh` now provisions its own PTY via `script`, so Codex can run under `tmux` or without it
 
 ## Further Reading
 

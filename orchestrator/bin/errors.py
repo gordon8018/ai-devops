@@ -2,10 +2,6 @@ class PlannerError(Exception):
     """Base class for planner-related errors."""
 
 
-class OpenClawDown(PlannerError):
-    """Raised when OpenClaw cannot be reached or returns unusable output."""
-
-
 class InvalidPlan(PlannerError):
     """Raised when a generated plan fails schema validation."""
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -15,7 +16,7 @@ REGISTRY = BASE / ".clawdbot" / "active-tasks.json"
 AGENT_RUNNER_CODEX = Path(os.getenv("CODEX_RUNNER_PATH", str(BASE / "agents" / "run-codex-agent.sh")))
 AGENT_RUNNER_CLAUDE = Path(os.getenv("CLAUDE_RUNNER_PATH", str(BASE / "agents" / "run-claude-agent.sh")))
 
-# Import prompt compiler (template now; later replace with OpenClaw-backed compiler)
+# Import prompt compiler (template fallback when Zoe did not provide a prompt)
 from prompt_compiler import compile_prompt  # type: ignore
 
 
@@ -54,7 +55,13 @@ def save_registry(items: list[dict]) -> None:
     REGISTRY.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def tmux_available() -> bool:
+    return shutil.which("tmux") is not None
+
+
 def tmux_has(session: str) -> bool:
+    if not tmux_available():
+        return False
     r = subprocess.run(["tmux", "has-session", "-t", session], capture_output=True, text=True)
     return r.returncode == 0
 
@@ -104,6 +111,33 @@ def resolve_branch(task: dict) -> str:
     return f"feat/{sanitize_branch_component(task['id'])}"
 
 
+def launch_agent_process(
+    runner: Path,
+    task: dict,
+    wt_dir: Path,
+    prompt_txt: Path,
+) -> tuple[str, str | None, int | None]:
+    model = task.get("model", "gpt-5.3-codex")
+    effort = task.get("effort", "high")
+    session = f"agent-{task['id']}"
+
+    if tmux_available():
+        if tmux_has(session):
+            raise RuntimeError(f"tmux session already exists: {session}")
+        cmd = f'"{runner}" "{task["id"]}" "{model}" "{effort}" "{wt_dir}" "{prompt_txt.name}"'
+        sh(["tmux", "new-session", "-d", "-s", session, "-c", str(wt_dir), cmd])
+        return ("tmux", session, None)
+
+    process = subprocess.Popen(
+        [str(runner), task["id"], model, effort, str(wt_dir), prompt_txt.name],
+        cwd=str(wt_dir),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    return ("process", None, process.pid)
+
+
 def spawn_agent(task: dict) -> dict:
     repo_name = task["repo"]
     repo_root = ensure_repo(repo_name)
@@ -118,11 +152,6 @@ def spawn_agent(task: dict) -> dict:
     prompt = task.get("prompt") or compile_prompt(task, wt_dir)
     prompt_txt.write_text(prompt, encoding="utf-8")
 
-    # tmux session
-    session = f"agent-{task['id']}"
-    if tmux_has(session):
-        raise RuntimeError(f"tmux session already exists: {session}")
-
     model = task.get("model", "gpt-5.3-codex")
     effort = task.get("effort", "high")
 
@@ -130,9 +159,7 @@ def spawn_agent(task: dict) -> dict:
     if not runner.exists():
         raise RuntimeError(f"Runner not found for agent {agent}: {runner}")
 
-    # IMPORTANT: runner supports optional PROMPT_FILE argument (5th arg)
-    cmd = f'"{runner}" "{task["id"]}" "{model}" "{effort}" "{wt_dir}" "{prompt_txt.name}"'
-    sh(["tmux", "new-session", "-d", "-s", session, "-c", str(wt_dir), cmd])
+    execution_mode, session, process_id = launch_agent_process(runner, task, wt_dir, prompt_txt)
 
     item = {
         "id": task["id"],
@@ -141,6 +168,8 @@ def spawn_agent(task: dict) -> dict:
         "branch": branch,
         "worktree": str(wt_dir),
         "tmuxSession": session,
+        "processId": process_id,
+        "executionMode": execution_mode,
         "agent": agent,
         "model": model,
         "effort": effort,
@@ -188,7 +217,10 @@ def main() -> None:
                 save_registry(reg)
 
                 p.unlink(missing_ok=True)
-                print(f"Spawned task {item['id']} in tmux {item['tmuxSession']}")
+                if item["executionMode"] == "tmux":
+                    print(f"Spawned task {item['id']} in tmux {item['tmuxSession']}")
+                else:
+                    print(f"Spawned task {item['id']} as background process {item['processId']}")
             except Exception as e:
                 # Do NOT delete the task file; keep it for inspection/retry
                 print(f"[ERROR] Failed processing {p}: {e}")
