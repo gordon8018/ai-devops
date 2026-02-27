@@ -22,6 +22,41 @@ The current implementation focuses on:
 
 ## Architecture
 
+```mermaid
+flowchart TD
+    U[Discord User] --> B[discord/bot.py<br/>Zoe's Discord entrypoint]
+
+    B --> C{Allowlist / Repo validation}
+    C -->|deny| R1[Reject request in Discord]
+    C -->|allow| P[orchestrator/bin/zoe_planner.py<br/>Planner CLI]
+
+    P --> E[orchestrator/bin/planner_engine.py<br/>Zoe internal planner]
+    E --> S[orchestrator/bin/plan_schema.py<br/>Strict plan validation]
+    S --> T[tasks/<planId>/plan.json<br/>tasks/<planId>/subtasks/*.json]
+
+    S --> D[orchestrator/bin/dispatch.py<br/>Dependency-aware dispatcher]
+    D --> Q[orchestrator/queue/*.json]
+
+    Q --> Z[orchestrator/bin/zoe-daemon.py<br/>Queue consumer]
+    Z --> W[worktrees/<task-or-plan-branch>/]
+    Z --> PR[prompt.txt]
+    Z --> A[agents/run-codex-agent.sh]
+
+    A --> X{tmux available?}
+    X -->|yes| TM[tmux session]
+    X -->|no| BG[detached local process]
+
+    TM --> REG[.clawdbot/active-tasks.json]
+    BG --> REG
+
+    REG --> M[orchestrator/bin/monitor.py<br/>Task / PR / CI monitor]
+    M --> N[Discord webhook / notifications]
+    M --> RL[Ralph Loop v2<br/>retry with prompt.retryN.txt]
+    RL --> A
+```
+
+Simplified execution path:
+
 ```text
 Discord /task
   -> discord/bot.py
