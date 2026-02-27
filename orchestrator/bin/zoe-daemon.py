@@ -1,20 +1,29 @@
 #!/usr/bin/env python3
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
 from typing import Optional
 
-BASE = Path.home() / "ai-devops"
+BASE = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
 QUEUE = BASE / "orchestrator" / "queue"
 REPOS = BASE / "repos"
 WORKTREES = BASE / "worktrees"
 REGISTRY = BASE / ".clawdbot" / "active-tasks.json"
 
-AGENT_RUNNER_CODEX = BASE / "agents" / "run-codex-agent.sh"
+AGENT_RUNNER_CODEX = Path(os.getenv("CODEX_RUNNER_PATH", str(BASE / "agents" / "run-codex-agent.sh")))
+AGENT_RUNNER_CLAUDE = Path(os.getenv("CLAUDE_RUNNER_PATH", str(BASE / "agents" / "run-claude-agent.sh")))
 
 # Import prompt compiler (template now; later replace with OpenClaw-backed compiler)
 from prompt_compiler import compile_prompt  # type: ignore
+
+
+def sanitize_branch_component(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_", "/") else "-" for ch in value.strip())
+    while "--" in cleaned:
+        cleaned = cleaned.replace("--", "-")
+    return cleaned.strip("-_/") or "task"
 
 
 def sh(cmd: list[str], cwd: Optional[Path] = None, check: bool = True) -> str:
@@ -79,17 +88,34 @@ def create_worktree(repo_root: Path, branch: str) -> Path:
     return wt_dir
 
 
-def spawn_codex_agent(task: dict) -> dict:
+def runner_for_agent(agent: str) -> Path:
+    if agent == "codex":
+        return AGENT_RUNNER_CODEX
+    if agent == "claude":
+        return AGENT_RUNNER_CLAUDE
+    raise RuntimeError(f"Unsupported agent: {agent}")
+
+
+def resolve_branch(task: dict) -> str:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    worktree_strategy = metadata.get("worktreeStrategy")
+    if worktree_strategy == "shared" and metadata.get("planId"):
+        return f"plan/{sanitize_branch_component(str(metadata['planId']))}"
+    return f"feat/{sanitize_branch_component(task['id'])}"
+
+
+def spawn_agent(task: dict) -> dict:
     repo_name = task["repo"]
     repo_root = ensure_repo(repo_name)
+    agent = str(task.get("agent", "codex"))
 
     # Branch / worktree names
-    branch = f"feat/{task['id']}"
+    branch = resolve_branch(task)
     wt_dir = create_worktree(repo_root, branch)
 
     # Generate prompt
     prompt_txt = wt_dir / "prompt.txt"
-    prompt = compile_prompt(task, wt_dir)
+    prompt = task.get("prompt") or compile_prompt(task, wt_dir)
     prompt_txt.write_text(prompt, encoding="utf-8")
 
     # tmux session
@@ -100,11 +126,12 @@ def spawn_codex_agent(task: dict) -> dict:
     model = task.get("model", "gpt-5.3-codex")
     effort = task.get("effort", "high")
 
-    if not AGENT_RUNNER_CODEX.exists():
-        raise RuntimeError(f"Codex runner not found: {AGENT_RUNNER_CODEX}")
+    runner = runner_for_agent(agent)
+    if not runner.exists():
+        raise RuntimeError(f"Runner not found for agent {agent}: {runner}")
 
     # IMPORTANT: runner supports optional PROMPT_FILE argument (5th arg)
-    cmd = f'"{AGENT_RUNNER_CODEX}" "{task["id"]}" "{model}" "{effort}" "{wt_dir}" "{prompt_txt.name}"'
+    cmd = f'"{runner}" "{task["id"]}" "{model}" "{effort}" "{wt_dir}" "{prompt_txt.name}"'
     sh(["tmux", "new-session", "-d", "-s", session, "-c", str(wt_dir), cmd])
 
     item = {
@@ -114,12 +141,17 @@ def spawn_codex_agent(task: dict) -> dict:
         "branch": branch,
         "worktree": str(wt_dir),
         "tmuxSession": session,
-        "agent": "codex",
+        "agent": agent,
         "model": model,
         "effort": effort,
         "status": "running",
         "startedAt": int(time.time() * 1000),
         "notifyOnComplete": True,
+        "metadata": task.get("metadata", {}),
+        "planId": task.get("metadata", {}).get("planId") if isinstance(task.get("metadata"), dict) else None,
+        "subtaskId": task.get("metadata", {}).get("subtaskId") if isinstance(task.get("metadata"), dict) else None,
+        "worktreeStrategy": task.get("metadata", {}).get("worktreeStrategy") if isinstance(task.get("metadata"), dict) else None,
+        "promptSource": "task.prompt" if task.get("prompt") else "prompt_compiler",
 
         # Ralph Loop controls
         "attempts": 0,
@@ -151,7 +183,7 @@ def main() -> None:
                     p.unlink(missing_ok=True)
                     continue
 
-                item = spawn_codex_agent(task)
+                item = spawn_agent(task)
                 reg.append(item)
                 save_registry(reg)
 
