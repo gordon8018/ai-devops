@@ -56,16 +56,13 @@ class TestHelperFunctions(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             sh(["false"], check=True)
 
-    @patch("monitor.WEBHOOK", None)
     def test_notify_no_webhook(self):
+        # notify() is now the fallback (prints to stdout) — must not raise
         notify("test message")
 
-    @patch("monitor.WEBHOOK", "https://discord.com/webhook/test")
-    @patch("monitor.request.urlopen")
-    def test_notify_success(self, mock_urlopen):
-        mock_urlopen.return_value = MagicMock()
+    def test_notify_success(self):
+        # notify() is now the fallback (prints to stdout) — must not raise
         notify("test message")
-        mock_urlopen.assert_called_once()
 
     @patch("monitor.shutil.which")
     def test_tmux_available_true(self, mock_which):
@@ -180,6 +177,58 @@ class TestMonitorTaskChecking(unittest.TestCase):
         changed, notified = check_all_tasks(set())
         updated_task = get_task("test-task-dead")
         self.assertEqual(updated_task["status"], "agent_dead")
+
+
+def test_monitor_once_exits_after_one_cycle(tmp_path, monkeypatch):
+    """monitor main() with --once must call run_once exactly once and return."""
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
+    import sys, importlib
+
+    # Pre-create DB
+    if "orchestrator.bin.db" in sys.modules:
+        del sys.modules["orchestrator.bin.db"]
+    import orchestrator.bin.db as db_mod
+    importlib.reload(db_mod)
+    db_mod.init_db()
+
+    # Load monitor fresh
+    if "orchestrator.bin.monitor" in sys.modules:
+        del sys.modules["orchestrator.bin.monitor"]
+
+    old_argv = sys.argv[:]
+    sys.argv = ["monitor.py", "--once"]
+    try:
+        import orchestrator.bin.monitor as mon
+        importlib.reload(mon)
+        calls = []
+        monkeypatch.setattr(mon, "run_once", lambda nr: calls.append(1))
+        mon.main()
+        assert len(calls) == 1, f"Expected 1 call, got {len(calls)}"
+    finally:
+        sys.argv = old_argv
+
+
+def test_monitor_run_once_reads_sqlite(tmp_path, monkeypatch):
+    """run_once() must use get_running_tasks() from db, not read any JSON."""
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
+    import sys, importlib
+
+    if "orchestrator.bin.db" in sys.modules:
+        del sys.modules["orchestrator.bin.db"]
+    import orchestrator.bin.db as db_mod
+    importlib.reload(db_mod)
+    db_mod.init_db()
+
+    if "orchestrator.bin.monitor" in sys.modules:
+        del sys.modules["orchestrator.bin.monitor"]
+    import orchestrator.bin.monitor as mon
+    importlib.reload(mon)
+
+    # Patch get_running_tasks to return empty list
+    called = []
+    monkeypatch.setattr(mon, "get_running_tasks", lambda: called.append(1) or [])
+    mon.run_once(set())
+    assert len(called) == 1, "get_running_tasks must be called by run_once"
 
 
 if __name__ == "__main__":

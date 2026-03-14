@@ -1,25 +1,28 @@
 #!/usr/bin/env python3
+import argparse
 import json
 import os
 import shutil
 import signal
 import subprocess
+import sys as _sys
 import time
 from pathlib import Path
 from typing import Optional, Tuple
-from urllib import error, request
-
-from dotenv import load_dotenv
 
 BASE = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
-REGISTRY = BASE / ".clawdbot" / "active-tasks.json"
 
-# Read webhook from ~/ai-devops/discord/.env (recommended single source)
-load_dotenv(BASE / "discord" / ".env", override=True)
-WEBHOOK = os.getenv("DISCORD_WEBHOOK_URL")
+_sys.path.insert(0, str(BASE / "orchestrator" / "bin"))
+from db import init_db, get_running_tasks, update_task
 
 RUNNER_CODEX = str(BASE / "agents" / "run-codex-agent.sh")
 LOG_DIR = BASE / "logs"
+
+try:
+    from notify import notify
+except ImportError:
+    def notify(msg: str) -> None:
+        print(f"[NOTIFY] {msg}")
 
 
 def sh(cmd: list[str], cwd: Optional[Path] = None, check: bool = False) -> str:
@@ -37,29 +40,6 @@ def sh(cmd: list[str], cwd: Optional[Path] = None, check: bool = False) -> str:
     if r.returncode != 0:
         return ""
     return (r.stdout or "").strip()
-
-
-def notify(msg: str) -> None:
-    if not WEBHOOK:
-        print("[WARN] DISCORD_WEBHOOK_URL not set; skip notify:", msg)
-        return
-    try:
-        data = json.dumps({"content": msg}).encode("utf-8")
-        req = request.Request(WEBHOOK, data=data, headers={"Content-Type": "application/json"})
-        request.urlopen(req, timeout=10).read()
-    except (error.URLError, error.HTTPError, TimeoutError, OSError) as exc:
-        print(f"[WARN] Failed to send Discord webhook notification: {exc}")
-
-
-def load_registry() -> list[dict]:
-    if not REGISTRY.exists():
-        return []
-    return json.loads(REGISTRY.read_text(encoding="utf-8"))
-
-
-def save_registry(items: list[dict]) -> None:
-    REGISTRY.parent.mkdir(parents=True, exist_ok=True)
-    REGISTRY.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def tmux_available() -> bool:
@@ -96,6 +76,24 @@ def load_exit_status(task_id: str) -> Optional[dict]:
     except (OSError, json.JSONDecodeError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def log_file_stale(task_id: str, max_age_minutes: float = 30.0) -> bool:
+    """Return True if the task's log file hasn't been updated within max_age_minutes."""
+    log_file = LOG_DIR / f"{task_id}.log"
+    if not log_file.exists():
+        return False
+    age_seconds = time.time() - log_file.stat().st_mtime
+    return age_seconds > (max_age_minutes * 60)
+
+
+def task_elapsed_minutes(task: dict) -> float:
+    """Return elapsed time in minutes since task started, or 0 if no startedAt."""
+    started_at = task.get("startedAt") or task.get("started_at")
+    if not started_at:
+        return 0
+    now_ms = int(time.time() * 1000)
+    return (now_ms - started_at) / 60000.0
 
 
 def pr_info(repo_dir: Path, branch: str) -> Optional[dict]:
@@ -207,11 +205,11 @@ def latest_run_failure(repo_dir: Path, branch: str) -> Optional[str]:
 
 
 def restart_codex_agent(task: dict, worktree: Path, prompt_filename: str) -> None:
-    session = task["tmuxSession"]
+    session = task.get("tmuxSession") or task.get("tmux_session")
     model = task.get("model", "gpt-5.3-codex")
     effort = task.get("effort", "high")
     task_id = task["id"]
-    execution_mode = task.get("executionMode", "tmux")
+    execution_mode = task.get("executionMode") or task.get("execution_mode", "tmux")
 
     if execution_mode == "tmux":
         # Kill old session (ignore errors)
@@ -222,7 +220,7 @@ def restart_codex_agent(task: dict, worktree: Path, prompt_filename: str) -> Non
         task["processId"] = None
         return
 
-    old_pid = task.get("processId")
+    old_pid = task.get("processId") or task.get("process_id")
     if isinstance(old_pid, int) and old_pid > 0:
         try:
             os.kill(old_pid, signal.SIGTERM)
@@ -239,191 +237,232 @@ def restart_codex_agent(task: dict, worktree: Path, prompt_filename: str) -> Non
     task["tmuxSession"] = None
 
 
-def main() -> None:
-    print("Monitor started.")
-    notified_ready = set()  # in-memory; persists only for process lifetime
+def _process_task(t: dict, notified_ready: set) -> None:
+    """Process a single task in one monitoring cycle."""
+    status = t.get("status")
+    if status not in ("running", "pr_created", "retrying"):
+        return
 
-    while True:
+    # Basic fields — db uses snake_case
+    session = t.get("tmuxSession") or t.get("tmux_session")
+    process_id = t.get("processId") or t.get("process_id")
+    execution_mode = t.get("executionMode") or t.get("execution_mode", "tmux")
+    worktree = Path(t.get("worktree", ""))
+    branch = t.get("branch", "")
+    task_id = t.get("id")
+
+    if not task_id or not worktree.exists() or not branch:
+        update_task(task_id, {"status": "blocked", "note": "invalid task record (missing id/worktree/branch)"})
+        t["status"] = "blocked"
+        return
+
+    if execution_mode == "process":
+        alive = process_alive(process_id)
+    else:
+        alive = bool(session) and tmux_alive(session)
+
+    # 1) PR info
+    pr = pr_info(worktree, branch)
+
+    if pr and t.get("status") == "running":
+        update_task(task_id, {
+            "status": "pr_created",
+            "pr_number": pr.get("number"),
+            "pr_url": pr.get("url"),
+        })
+        t["status"] = "pr_created"
+        t["pr"] = pr.get("number")
+        t["prUrl"] = pr.get("url")
+
+    if not pr:
+        # Runtime only matters before a PR exists.
+        if not alive and t.get("status") == "running":
+            exit_info = load_exit_status(task_id)
+            if exit_info:
+                exit_code = exit_info.get("exitCode")
+                completed_at = exit_info.get("finishedAt")
+                if exit_code == 0:
+                    update_task(task_id, {
+                        "status": "agent_exited",
+                        "completed_at": completed_at,
+                        "note": "agent process exited cleanly before opening a PR",
+                    })
+                    t["status"] = "agent_exited"
+                else:
+                    update_task(task_id, {
+                        "status": "agent_failed",
+                        "completed_at": completed_at,
+                        "note": f"agent exited with code {exit_code}",
+                    })
+                    t["status"] = "agent_failed"
+                    notify(
+                        f"\u26a0\ufe0f Agent exited: `{task_id}` with code {exit_code}. Check logs."
+                    )
+            else:
+                note = (
+                    "background process not found"
+                    if execution_mode == "process"
+                    else "tmux session not found"
+                )
+                update_task(task_id, {"status": "agent_dead", "note": note})
+                t["status"] = "agent_dead"
+                runtime_ref = (
+                    f"pid={process_id}" if execution_mode == "process" else session
+                )
+                notify(
+                    f"\u26a0\ufe0f Agent session dead: `{task_id}` ({runtime_ref}). Check logs."
+                )
+        return
+
+    # 3) Only handle OPEN PRs for checks/retry
+    if (pr.get("state") or "").upper() != "OPEN":
+        return
+
+    passed, fail_summary, pending = analyze_checks(pr)
+
+    # pending: do nothing
+    if pending:
+        return
+
+    # Ready criteria: checks passed + merge clean
+    if passed and merge_clean(pr):
+        if task_id not in notified_ready:
+            notified_ready.add(task_id)
+            update_task(task_id, {
+                "status": "ready",
+                "completed_at": int(time.time() * 1000),
+                "note": "checks passed and mergeable clean",
+            })
+            t["status"] = "ready"
+            notify(f"\u2705 PR ready: `{task_id}` {t.get('prUrl') or t.get('pr_url', '')} (checks\u2705 + merge\u2705)")
+        return
+
+    # checks passed but merge not clean -> notify human (merge conflicts)
+    if passed and not merge_clean(pr):
+        # Avoid spamming: only notify once by status change
+        if t.get("status") != "needs_rebase":
+            note = f"merge not clean: mergeable={pr.get('mergeable')} state={pr.get('mergeStateStatus')}"
+            update_task(task_id, {"status": "needs_rebase", "note": note})
+            t["status"] = "needs_rebase"
+            notify(
+                f"\u26a0\ufe0f PR checks passed but merge not clean: `{task_id}` {t.get('prUrl') or t.get('pr_url', '')}\n"
+                f"mergeable={pr.get('mergeable')} mergeStateStatus={pr.get('mergeStateStatus')}"
+            )
+        return
+
+    # 4) checks failed -> Ralph Loop v2 retry
+    if fail_summary:
+        attempts = int(t.get("attempts", 0))
+        max_attempts = int(t.get("maxAttempts") or t.get("max_attempts", 3))
+
+        update_task(task_id, {"last_failure": fail_summary})
+
+        if attempts >= max_attempts:
+            if t.get("status") != "blocked":
+                update_task(task_id, {"status": "blocked", "note": "max retries reached"})
+                t["status"] = "blocked"
+                notify(
+                    f"\U0001f6d1 CI failed and max retries reached: `{task_id}` {t.get('prUrl') or t.get('pr_url', '')}\n"
+                    f"Fail: {fail_summary}"
+                )
+            return
+
+        retry_n = attempts + 1
+
+        # Pull more CI details if possible
+        ci_detail = latest_run_failure(worktree, branch) or ""
+
+        # Base prompt
+        base_prompt_path = worktree / "prompt.txt"
+        base_prompt = base_prompt_path.read_text(encoding="utf-8") if base_prompt_path.exists() else ""
+
+        retry_prompt_path = worktree / f"prompt.retry{retry_n}.txt"
+
+        retry_prompt = (
+            base_prompt
+            + "\n\n"
+            + f"RERUN DIRECTIVE (Retry #{retry_n}):\n"
+            + "CI is failing. Your ONLY priority is to make CI green.\n"
+            + f"Failed checks summary: {fail_summary}\n\n"
+            + (ci_detail + "\n\n" if ci_detail else "")
+            + "Instructions:\n"
+            + "- Read failing logs and identify root cause.\n"
+            + "- Apply minimal fix.\n"
+            + "- Run local equivalent checks/tests if available.\n"
+            + "- Push commits to the SAME branch and update the PR.\n"
+        )
+        retry_prompt_path.write_text(retry_prompt, encoding="utf-8")
+
+        # Restart agent with retry prompt
         try:
-            items = load_registry()
-            changed = False
+            restart_codex_agent(t, worktree, retry_prompt_path.name)
+        except Exception as e:
+            update_task(task_id, {"status": "blocked", "note": f"failed to restart agent: {e}"})
+            t["status"] = "blocked"
+            notify(f"\U0001f6d1 Failed to restart agent for `{task_id}`: {e}")
+            return
 
-            for t in items:
-                try:
-                    status = t.get("status")
-                    if status not in ("running", "pr_created"):
-                        continue
+        update_task(task_id, {
+            "attempts": retry_n,
+            "status": "running",
+            "note": f"retry #{retry_n} triggered",
+        })
+        t["attempts"] = retry_n
+        t["status"] = "running"
 
-                    # Basic fields
-                    session = t.get("tmuxSession")
-                    process_id = t.get("processId")
-                    execution_mode = t.get("executionMode", "tmux")
-                    worktree = Path(t.get("worktree", ""))
-                    branch = t.get("branch", "")
-                    task_id = t.get("id")
+        notify(
+            f"\U0001f501 Retry #{retry_n} triggered: `{task_id}` {t.get('prUrl') or t.get('pr_url', '')}\n"
+            f"Fail: {fail_summary}"
+        )
 
-                    if not task_id or not worktree.exists() or not branch:
-                        t["status"] = "blocked"
-                        t["note"] = "invalid task record (missing id/worktree/branch)"
-                        changed = True
-                        continue
 
-                    if execution_mode == "process":
-                        alive = process_alive(process_id)
-                    else:
-                        alive = bool(session) and tmux_alive(session)
-
-                    # 1) PR info
-                    pr = pr_info(worktree, branch)
-
-                    if pr and t.get("status") == "running":
-                        t["status"] = "pr_created"
-                        t["pr"] = pr.get("number")
-                        t["prUrl"] = pr.get("url")
-                        changed = True
-
-                    if not pr:
-                        # Runtime only matters before a PR exists.
-                        if not alive and t.get("status") == "running":
-                            exit_info = load_exit_status(task_id)
-                            if exit_info:
-                                exit_code = exit_info.get("exitCode")
-                                t["completedAt"] = exit_info.get("finishedAt")
-                                if exit_code == 0:
-                                    t["status"] = "agent_exited"
-                                    t["note"] = "agent process exited cleanly before opening a PR"
-                                else:
-                                    t["status"] = "agent_failed"
-                                    t["note"] = f"agent exited with code {exit_code}"
-                                    notify(
-                                        f"⚠️ Agent exited: `{task_id}` with code {exit_code}. Check logs."
-                                    )
-                            else:
-                                t["status"] = "agent_dead"
-                                t["note"] = (
-                                    "background process not found"
-                                    if execution_mode == "process"
-                                    else "tmux session not found"
-                                )
-                                runtime_ref = (
-                                    f"pid={process_id}" if execution_mode == "process" else session
-                                )
-                                notify(
-                                    f"⚠️ Agent session dead: `{task_id}` ({runtime_ref}). Check logs."
-                                )
-                            changed = True
-                        continue
-
-                    # 3) Only handle OPEN PRs for checks/retry
-                    if (pr.get("state") or "").upper() != "OPEN":
-                        continue
-
-                    passed, fail_summary, pending = analyze_checks(pr)
-
-                    # pending: do nothing
-                    if pending:
-                        continue
-
-                    # Ready criteria: checks passed + merge clean
-                    if passed and merge_clean(pr):
-                        if task_id not in notified_ready:
-                            notified_ready.add(task_id)
-                            t["status"] = "ready"
-                            t["completedAt"] = int(time.time() * 1000)
-                            t["note"] = "checks passed and mergeable clean"
-                            changed = True
-                            notify(f"✅ PR ready: `{task_id}` {t.get('prUrl','')} (checks✅ + merge✅)")
-                        continue
-
-                    # checks passed but merge not clean -> notify human (merge conflicts)
-                    if passed and not merge_clean(pr):
-                        # Avoid spamming: only notify once by status change
-                        if t.get("status") != "needs_rebase":
-                            t["status"] = "needs_rebase"
-                            t["note"] = f"merge not clean: mergeable={pr.get('mergeable')} state={pr.get('mergeStateStatus')}"
-                            changed = True
-                            notify(
-                                f"⚠️ PR checks passed but merge not clean: `{task_id}` {t.get('prUrl','')}\n"
-                                f"mergeable={pr.get('mergeable')} mergeStateStatus={pr.get('mergeStateStatus')}"
-                            )
-                        continue
-
-                    # 4) checks failed -> Ralph Loop v2 retry
-                    if fail_summary:
-                        attempts = int(t.get("attempts", 0))
-                        max_attempts = int(t.get("maxAttempts", 3))
-
-                        t["lastFailure"] = fail_summary
-
-                        if attempts >= max_attempts:
-                            if t.get("status") != "blocked":
-                                t["status"] = "blocked"
-                                t["note"] = "max retries reached"
-                                changed = True
-                                notify(
-                                    f"🛑 CI failed and max retries reached: `{task_id}` {t.get('prUrl','')}\n"
-                                    f"Fail: {fail_summary}"
-                                )
-                            continue
-
-                        retry_n = attempts + 1
-
-                        # Pull more CI details if possible
-                        ci_detail = latest_run_failure(worktree, branch) or ""
-
-                        # Base prompt
-                        base_prompt_path = worktree / "prompt.txt"
-                        base_prompt = base_prompt_path.read_text(encoding="utf-8") if base_prompt_path.exists() else ""
-
-                        retry_prompt_path = worktree / f"prompt.retry{retry_n}.txt"
-
-                        retry_prompt = (
-                            base_prompt
-                            + "\n\n"
-                            + f"RERUN DIRECTIVE (Retry #{retry_n}):\n"
-                            + "CI is failing. Your ONLY priority is to make CI green.\n"
-                            + f"Failed checks summary: {fail_summary}\n\n"
-                            + (ci_detail + "\n\n" if ci_detail else "")
-                            + "Instructions:\n"
-                            + "- Read failing logs and identify root cause.\n"
-                            + "- Apply minimal fix.\n"
-                            + "- Run local equivalent checks/tests if available.\n"
-                            + "- Push commits to the SAME branch and update the PR.\n"
-                        )
-                        retry_prompt_path.write_text(retry_prompt, encoding="utf-8")
-
-                        # Restart agent with retry prompt
-                        try:
-                            restart_codex_agent(t, worktree, retry_prompt_path.name)
-                        except Exception as e:
-                            t["status"] = "blocked"
-                            t["note"] = f"failed to restart agent: {e}"
-                            changed = True
-                            notify(f"🛑 Failed to restart agent for `{task_id}`: {e}")
-                            continue
-
-                        t["attempts"] = retry_n
-                        t["status"] = "running"
-                        t["note"] = f"retry #{retry_n} triggered"
-                        changed = True
-
-                        notify(
-                            f"🔁 Retry #{retry_n} triggered: `{task_id}` {t.get('prUrl','')}\n"
-                            f"Fail: {fail_summary}"
-                        )
-                except Exception as exc:
-                    task_id = t.get("id", "<unknown>")
-                    t["status"] = "blocked"
-                    t["note"] = f"monitor error: {exc}"
-                    changed = True
-                    print(f"[ERROR] Monitor failed for task {task_id}: {exc}")
-                    continue
-
-            if changed:
-                save_registry(items)
+def check_all_tasks(notified_ready: set) -> Tuple[bool, set]:
+    """
+    Run one monitoring cycle. Returns (changed, notified_ready).
+    'changed' is always False now (updates are immediate), kept for API compat.
+    """
+    items = get_running_tasks()
+    for t in items:
+        try:
+            _process_task(t, notified_ready)
         except Exception as exc:
-            print(f"[ERROR] Monitor loop failed: {exc}")
+            task_id = t.get("id", "<unknown>")
+            update_task(task_id, {"status": "blocked", "note": f"monitor error: {exc}"})
+            print(f"[ERROR] Monitor failed for task {task_id}: {exc}")
+    return (False, notified_ready)
 
+
+def run_once(notified_ready: set) -> None:
+    """Run one monitoring cycle over all active tasks."""
+    try:
+        items = get_running_tasks()
+        for t in items:
+            try:
+                _process_task(t, notified_ready)
+            except Exception as exc:
+                task_id = t.get("id", "<unknown>")
+                update_task(task_id, {"status": "blocked", "note": f"monitor error: {exc}"})
+                print(f"[ERROR] Monitor failed for task {task_id}: {exc}")
+    except Exception as exc:
+        print(f"[ERROR] Monitor loop failed: {exc}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Zoe task monitor")
+    parser.add_argument("--once", action="store_true",
+                        help="Run one monitoring cycle and exit")
+    args = parser.parse_args()
+
+    init_db()
+    notified_ready: set = set()
+
+    if args.once:
+        run_once(notified_ready)
+        return
+
+    print("Monitor started.")
+    while True:
+        run_once(notified_ready)
         time.sleep(30)
 
 
