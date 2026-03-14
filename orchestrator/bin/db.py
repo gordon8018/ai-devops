@@ -90,22 +90,25 @@ def init_db() -> None:
         for col_name, col_def in new_columns:
             try:
                 conn.execute(f"ALTER TABLE agent_tasks ADD COLUMN {col_name} {col_def}")
-            except Exception:
+            except sqlite3.OperationalError:
                 pass  # column already exists
 
         conn.commit()
 
 
 def insert_task(task: dict) -> None:
-    """Insert or update a task"""
+    """Insert or update a task
+
+    Note: cleaned_up is normally set via mark_cleaned_up() after worktree removal.
+    """
     with get_db() as conn:
         conn.execute("""
             INSERT OR REPLACE INTO agent_tasks
             (id, plan_id, repo, title, status, agent, model, effort,
              worktree, branch, tmux_session, process_id,
              execution_mode, prompt_file, notify_on_complete, worktree_strategy,
-             started_at, attempts, max_attempts, metadata, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             cleaned_up, started_at, attempts, max_attempts, metadata, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             task["id"],
             task.get("planId") or task.get("plan_id"),
@@ -123,6 +126,7 @@ def insert_task(task: dict) -> None:
             task.get("promptFile") or task.get("prompt_file"),
             int(task.get("notifyOnComplete", task.get("notify_on_complete", 1))),
             task.get("worktreeStrategy") or task.get("worktree_strategy", "isolated"),
+            task.get("cleaned_up", 0),
             task.get("startedAt") or task.get("started_at"),
             task.get("attempts", 0),
             task.get("maxAttempts") or task.get("max_attempts", 3),
