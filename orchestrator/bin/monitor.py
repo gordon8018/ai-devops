@@ -73,6 +73,34 @@ def _load_failure_logs(repo: str, limit: int = 2) -> str:
     return "\n".join(excerpts)
 
 
+def _save_success_pattern(
+    *, repo: str, task_id: str, title: str, worktree: Path, attempts: int
+) -> None:
+    """Save successful prompt as a template for future planning reference.
+
+    Note: one file per slug (same repo+title overwrites the previous winner),
+    so this always stores the most recent winning prompt.
+    """
+    import re as _re
+    prompt_path = worktree / "prompt.txt"
+    if not prompt_path.exists():
+        return
+    content = prompt_path.read_text(encoding="utf-8")
+
+    templates_dir = BASE / ".clawdbot" / "prompt-templates" / repo.replace("/", "_")
+    templates_dir.mkdir(parents=True, exist_ok=True)
+
+    slug = _re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:48]
+    if not slug:
+        slug = f"task-{task_id}"[:48]
+    timestamp = int(time.time() * 1000)
+    out_file = templates_dir / f"{slug}.md"
+    out_file.write_text(
+        f"<!-- attempts={attempts} timestamp={timestamp} repo={repo} -->\n{content}",
+        encoding="utf-8",
+    )
+
+
 def _build_retry_prompt(task: dict, retry_n: int, fail_summary: str, ci_detail: str) -> Path:
     """
     Build and write prompt.retryN.txt for a task.
@@ -427,6 +455,13 @@ def _process_task(t: dict, notified_ready: set) -> None:
                 "note": "checks passed and mergeable clean",
             })
             t["status"] = "ready"
+            _save_success_pattern(
+                repo=t.get("repo", ""),
+                task_id=task_id,
+                title=t.get("title", task_id),
+                worktree=worktree,
+                attempts=int(t.get("attempts", 0)),
+            )
             notify(f"\u2705 PR ready: `{task_id}` {t.get('prUrl') or t.get('pr_url', '')} (checks\u2705 + merge\u2705)")
         return
 

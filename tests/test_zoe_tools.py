@@ -94,3 +94,26 @@ def test_task_status_and_list_plans_read_tool_layer_state(tmp_path, monkeypatch)
 
     status_result = task_status(plan_id="1730000000000-demo-repo-fix-auth", base_dir=base)
     assert status_result["tasks"][0]["id"] == "1730000000000-demo-repo-fix-auth-S1"
+
+
+def test_build_plan_request_injects_success_patterns(tmp_path, monkeypatch):
+    """build_plan_request() injects successPatterns when templates exist for the repo."""
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
+
+    templates_dir = tmp_path / ".clawdbot" / "prompt-templates" / "my-repo"
+    templates_dir.mkdir(parents=True, exist_ok=True)
+    (templates_dir / "fix-auth.md").write_text(
+        "<!-- attempts=1 timestamp=1741910400000 repo=my-repo -->\noriginal prompt"
+    )
+
+    import importlib, orchestrator.bin.zoe_tools as zt
+    importlib.reload(zt)
+
+    result = zt.build_plan_request({
+        "repo": "my-repo", "title": "Fix auth", "description": "Fix it",
+        "requested_by": "zoe", "requested_at": 1741910400000,
+    })
+    patterns = result.get("context", {}).get("successPatterns")
+    assert patterns is not None
+    assert len(patterns) >= 1
+    assert patterns[0]["title"] == "fix-auth"

@@ -87,7 +87,36 @@ def validate_task_policy(task_input: dict[str, Any]) -> list[str]:
     return flags
 
 
-def build_plan_request(task_input: dict[str, Any]) -> dict[str, Any]:
+def _load_success_patterns(repo: str, *, base_dir: Path | None = None) -> list[dict]:
+    """Load up to 3 recent success prompt templates for a repo."""
+    import re as _re
+    root = (base_dir or default_base_dir()) / ".clawdbot" / "prompt-templates" / repo.replace("/", "_")
+    if not root.exists():
+        return []
+    files = sorted(root.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)[:3]
+    patterns = []
+    for f in files:
+        try:
+            first_line = f.read_text(encoding="utf-8").splitlines()[0]
+            attempts_match = _re.search(r"attempts=(\d+)", first_line)
+            ts_match = _re.search(r"timestamp=(\d+)", first_line)
+            patterns.append({
+                "title": f.stem,
+                "attemptCount": int(attempts_match.group(1)) if attempts_match else 0,
+                "timestamp": int(ts_match.group(1)) if ts_match else 0,
+            })
+        except Exception:
+            continue
+    return patterns
+
+
+def _inject_success_patterns(context: dict, *, repo: str, base_dir: Path | None = None) -> None:
+    patterns = _load_success_patterns(repo, base_dir=base_dir)
+    if patterns:
+        context["successPatterns"] = patterns
+
+
+def build_plan_request(task_input: dict[str, Any], *, base_dir: Path | None = None) -> dict[str, Any]:
     requested_at = int(task_input.get("requested_at") or task_input.get("requestedAt") or 0)
     if requested_at <= 0:
         requested_at = int(time.time() * 1000)
@@ -118,6 +147,7 @@ def build_plan_request(task_input: dict[str, Any]) -> dict[str, Any]:
     risk_flags = validate_task_policy({"objective": objective})
     context = dict(task_input.get("context") or {})
     context.setdefault("riskFlags", risk_flags)
+    _inject_success_patterns(context, repo=repo, base_dir=base_dir)
 
     return {
         "planId": plan_id,

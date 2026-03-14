@@ -484,6 +484,10 @@ def _build_prompt(
     if files_hint:
         lines.extend(["", "FILES TO CHECK FIRST:"])
         lines.extend(f"- {item}" for item in files_hint)
+    success_patterns = constraints.get("successPatterns") or []
+    if success_patterns:
+        lines.extend(["", "PAST SUCCESSES (approaches that worked before):"])
+        lines.extend(f"- {p['title']} (succeeded in {p['attemptCount']} attempt(s))" for p in success_patterns[:3])
     lines.extend(
         [
             "",
@@ -946,6 +950,10 @@ class ZoePlannerEngine:
         routing = task_input.get("routing") if isinstance(task_input.get("routing"), dict) else {}
         constraints = dict(task_input.get("constraints")) if isinstance(task_input.get("constraints"), dict) else {}
         context = dict(task_input.get("context")) if isinstance(task_input.get("context"), dict) else {}
+        # Propagate successPatterns from context into constraints so _build_prompt() can access them
+        success_patterns = context.get("successPatterns")
+        if success_patterns:
+            constraints.setdefault("successPatterns", success_patterns)
         explicit_files_hint = context.get("filesHint")
         if not isinstance(explicit_files_hint, list):
             explicit_files_hint = []

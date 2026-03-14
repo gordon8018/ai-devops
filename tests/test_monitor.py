@@ -300,5 +300,28 @@ def test_failure_log_written_on_ci_failure(tmp_path, monkeypatch):
     assert data["failSummary"] == "lint:FAILURE"
 
 
+def test_success_pattern_written_on_ready(tmp_path, monkeypatch):
+    """When task reaches 'ready', prompt.txt must be saved to prompt-templates/."""
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
+    import importlib, orchestrator.bin.monitor as mon
+    importlib.reload(mon)
+
+    wt = tmp_path / "worktrees" / "feat-t1"
+    wt.mkdir(parents=True)
+    (wt / "prompt.txt").write_text("winning prompt content")
+
+    mon._save_success_pattern(
+        repo="my-repo", task_id="t1",
+        title="Fix auth flow", worktree=wt, attempts=1
+    )
+
+    templates_dir = tmp_path / ".clawdbot" / "prompt-templates" / "my-repo"
+    files = list(templates_dir.glob("*.md"))
+    assert len(files) == 1
+    content = files[0].read_text()
+    assert "winning prompt content" in content
+    assert "attempts=1" in content
+
+
 if __name__ == "__main__":
     unittest.main()
