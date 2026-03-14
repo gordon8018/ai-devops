@@ -5,25 +5,20 @@ Tests for dispatch.py - Fixed Version
 
 import json
 import os
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-SCRIPT_DIR = Path(__file__).parent.absolute()
-BASE = SCRIPT_DIR.parent
-sys.path.insert(0, str(BASE / "orchestrator" / "bin"))
-
-from dispatch import (
-    default_base_dir, queue_dir, registry_file, tasks_dir, plan_dir,
+from orchestrator.bin.dispatch import (
+    default_base_dir, queue_dir, tasks_dir, plan_dir,
     subtask_archive_path, dispatch_state_path, execution_task_id,
-    load_registry, load_dispatch_state, save_dispatch_state,
+    load_dispatch_state, save_dispatch_state,
     ready_subtask_ids, topologically_sorted_subtask_ids,
     build_execution_task, archive_subtasks, update_subtask_archive,
     dispatch_ready_subtasks,
 )
-from plan_schema import Plan, Subtask
+from orchestrator.bin.plan_schema import Plan, Subtask
 
 
 def make_plan(**overrides) -> Plan:
@@ -74,11 +69,6 @@ class TestPathHelpers(unittest.TestCase):
         result = queue_dir(base)
         self.assertEqual(result, base / "orchestrator" / "queue")
 
-    def test_registry_file(self):
-        base = Path("/test/base")
-        result = registry_file(base)
-        self.assertEqual(result, base / ".clawdbot" / "active-tasks.json")
-
     def test_plan_dir(self):
         base = Path("/test/base")
         plan = make_plan(planId="test-plan-123")
@@ -92,26 +82,6 @@ class TestExecutionTaskId(unittest.TestCase):
         subtask = plan.subtasks[0]
         result = execution_task_id(plan, subtask)
         self.assertEqual(result, "plan-123-S1")
-
-
-class TestRegistryOperations(unittest.TestCase):
-    def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.base = Path(self.temp_dir.name)
-
-    def tearDown(self):
-        self.temp_dir.cleanup()
-
-    def test_load_registry_not_exists(self):
-        result = load_registry(self.base / "nonexistent.json")
-        self.assertEqual(result, [])
-
-    def test_load_registry_success(self):
-        registry_path = self.base / "registry.json"
-        data = [{"id": "task-1", "status": "running"}]
-        registry_path.write_text(json.dumps(data))
-        result = load_registry(registry_path)
-        self.assertEqual(len(result), 1)
 
 
 class TestDispatchState(unittest.TestCase):
