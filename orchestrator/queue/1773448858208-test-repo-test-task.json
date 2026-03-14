@@ -1,0 +1,13 @@
+{
+  "id": "1773448858208-test-repo-test-task",
+  "repo": "test/repo",
+  "title": "Test Task",
+  "agent": "codex",
+  "model": "gpt-5.3-codex",
+  "effort": "medium",
+  "status": "queued",
+  "metadata": {
+    "description": "Test description",
+    "files_hint": []
+  }
+}

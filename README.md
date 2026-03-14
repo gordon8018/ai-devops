@@ -207,6 +207,58 @@ Current test coverage includes:
 - `pydantic` is not currently used in this repo; validation is implemented in typed Python code in `plan_schema.py`
 - `agents/run-codex-agent.sh` now provisions its own PTY via `script`, so Codex can run under `tmux` or without it
 
+## Testing
+
+### Run Tests
+
+```bash
+# Quick test run
+./scripts/test.sh
+
+# With coverage
+./scripts/test.sh --coverage
+
+# Run specific test file
+./scripts/test.sh --test tests/test_db.py
+
+# Run specific test
+./scripts/test.sh --test tests/test_db.py::TestTaskCRUD
+```
+
+### Test Coverage
+
+| Metric | Value |
+|--------|-------|
+| Total Tests | 104 |
+| Overall Coverage | ~54% |
+
+See [docs/TEST_COVERAGE.md](docs/TEST_COVERAGE.md) for detailed coverage report.
+
+### Test Structure
+
+```
+tests/
+├── test_plan_schema.py       # Plan validation tests
+├── test_planner_engine.py    # Planning logic tests
+├── test_dispatch.py          # Dispatch logic tests
+├── test_zoe_tools.py         # Zoe tools tests
+├── test_zoe_tool_api.py      # Tool API tests
+├── test_webhook_server.py    # Webhook handling tests
+├── test_monitor.py           # Monitor logic tests
+├── test_prompt_compiler.py   # Prompt compilation tests
+├── test_db.py                # Database operation tests
+└── test_agent.py             # Agent CLI tests
+```
+
+### CI/CD
+
+Tests run automatically on:
+- Push to main/master branches
+- Pull requests to main/master
+
+See `.github/workflows/ci.yml` for CI configuration.
+
 ## Further Reading
 
 - `docs/zoe_planner.md`
+- `docs/TEST_COVERAGE.md`
