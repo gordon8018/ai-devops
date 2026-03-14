@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""
+Zoe Daemon - Queue consumer and agent spawner
+
+Consumes tasks from queue/, creates worktrees, and spawns coding agents.
+"""
+
 import json
 import os
 import shutil
@@ -11,15 +17,19 @@ BASE = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
 QUEUE = BASE / "orchestrator" / "queue"
 REPOS = BASE / "repos"
 WORKTREES = BASE / "worktrees"
+REGISTRY = BASE / ".clawdbot" / "active-tasks.json"  # Legacy
+
+# Import SQLite tracker
+try:
+    from .db import init_db, insert_task, update_task
+except ImportError:
+    from db import init_db, insert_task, update_task
+
 AGENT_RUNNER_CODEX = Path(os.getenv("CODEX_RUNNER_PATH", str(BASE / "agents" / "run-codex-agent.sh")))
 AGENT_RUNNER_CLAUDE = Path(os.getenv("CLAUDE_RUNNER_PATH", str(BASE / "agents" / "run-claude-agent.sh")))
 
 # Import prompt compiler (template fallback when Zoe did not provide a prompt)
 from prompt_compiler import compile_prompt  # type: ignore
-
-import sys as _sys
-_sys.path.insert(0, str(BASE / "orchestrator" / "bin"))
-from db import init_db, get_task, insert_task
 
 
 def sanitize_branch_component(value: str) -> str:
@@ -44,6 +54,16 @@ def sh(cmd: list[str], cwd: Optional[Path] = None, check: bool = True) -> str:
             f"STDERR:\n{r.stderr}\n"
         )
     return (r.stdout or "").strip()
+
+
+def load_registry() -> list[dict]:
+    """Legacy compatibility"""
+    return []  # SQLite is source of truth now
+
+
+def save_registry(items: list[dict]) -> None:
+    """Legacy compatibility - no-op"""
+    pass
 
 
 def tmux_available() -> bool:
@@ -187,8 +207,10 @@ def spawn_agent(task: dict) -> dict:
 
 
 def main() -> None:
-    QUEUE.mkdir(parents=True, exist_ok=True)
+    # Initialize SQLite database
     init_db()
+    
+    QUEUE.mkdir(parents=True, exist_ok=True)
     print(f"Zoe daemon started. Watching queue: {QUEUE}")
 
     while True:
@@ -198,12 +220,9 @@ def main() -> None:
                 if "id" not in task or "repo" not in task:
                     raise RuntimeError(f"Invalid task JSON (missing id/repo): {p}")
 
-                if get_task(task["id"]) is not None:
-                    # already tracked; remove queue item to avoid loops
-                    p.unlink(missing_ok=True)
-                    continue
-
                 item = spawn_agent(task)
+                
+                # Insert into SQLite
                 insert_task(item)
 
                 p.unlink(missing_ok=True)

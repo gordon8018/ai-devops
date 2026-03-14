@@ -6,9 +6,12 @@ from pathlib import Path
 import time
 from typing import Any
 
-from .db import init_db, get_all_tasks
-from .errors import DispatchError
-from .plan_schema import Plan, Subtask, load_plan, sanitize_identifier
+try:
+    from .errors import DispatchError
+    from .plan_schema import Plan, Subtask, load_plan, sanitize_identifier
+except ImportError:
+    from errors import DispatchError
+    from plan_schema import Plan, Subtask, load_plan, sanitize_identifier
 
 
 def default_base_dir() -> Path:
@@ -18,6 +21,11 @@ def default_base_dir() -> Path:
 def queue_dir(base_dir: Path | None = None) -> Path:
     root = base_dir or default_base_dir()
     return root / "orchestrator" / "queue"
+
+
+def registry_file(base_dir: Path | None = None) -> Path:
+    root = base_dir or default_base_dir()
+    return root / ".clawdbot" / "active-tasks.json"
 
 
 def tasks_dir(base_dir: Path | None = None) -> Path:
@@ -39,6 +47,12 @@ def dispatch_state_path(plan: Plan, base_dir: Path | None = None) -> Path:
 
 def execution_task_id(plan: Plan, subtask: Subtask) -> str:
     return sanitize_identifier(f"{plan.plan_id}-{subtask.id}")
+
+
+def load_registry(registry_path: Path) -> list[dict[str, Any]]:
+    if not registry_path.exists():
+        return []
+    return json.loads(registry_path.read_text(encoding="utf-8"))
 
 
 def load_dispatch_state(plan: Plan, base_dir: Path | None = None) -> dict[str, Any]:
@@ -143,12 +157,7 @@ def dispatch_ready_subtasks(
     root = base_dir or default_base_dir()
     queue_root = queue_dir(root)
     queue_root.mkdir(parents=True, exist_ok=True)
-    if registry_items is None:
-        try:
-            init_db()
-            registry_items = get_all_tasks(limit=1000)
-        except Exception:
-            registry_items = []
+    registry_items = registry_items if registry_items is not None else load_registry(registry_file(root))
     state = load_dispatch_state(plan, root)
     dispatched = state.setdefault("dispatched", {})
     completed = ready_subtask_ids(plan, registry_items)

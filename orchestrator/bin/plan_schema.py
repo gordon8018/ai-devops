@@ -7,7 +7,10 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .errors import InvalidPlan
+try:
+    from .errors import InvalidPlan
+except ImportError:
+    from errors import InvalidPlan
 
 ALLOWED_AGENTS = {"codex", "claude"}
 ALLOWED_EFFORTS = {"low", "medium", "high"}

@@ -6,8 +6,12 @@ from pathlib import Path
 import re
 from typing import Any, Mapping
 
-from .errors import InvalidPlan
-from .plan_schema import Plan
+try:
+    from .errors import InvalidPlan
+    from .plan_schema import Plan
+except ImportError:
+    from errors import InvalidPlan
+    from plan_schema import Plan
 
 CODE_CHANGE_TERMS = (
     "implement",
