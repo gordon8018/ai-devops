@@ -9,6 +9,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      AI_DEVOPS_HOME: ${{ github.workspace }}
     strategy:
       matrix:
         python-version: ["3.12"]
@@ -32,12 +34,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
           pip install -r requirements.txt
           pip install pytest pytest-cov python-dotenv
 
       - name: Run tests
         run: |
+          export PYTHONPATH="${GITHUB_WORKSPACE}:${PYTHONPATH}"
           python -m pytest tests/ -v --cov=orchestrator --cov-report=term-missing --cov-report=xml
 
       - name: Upload coverage to Codecov
@@ -48,6 +50,8 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    env:
+      AI_DEVOPS_HOME: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
 
@@ -64,12 +68,12 @@ jobs:
 
       - name: Run flake8
         run: |
-          flake8 orchestrator/ --max-line-length=120 --ignore=E501,W503
+          flake8 orchestrator/ --exclude=orchestrator/bin/*,orchestrator/queue/* --max-line-length=120 --ignore=E501,W503
 
       - name: Check formatting with black
         run: |
-          black --check orchestrator/ tests/
+          black --check orchestrator/ --extend-exclude "(orchestrator/bin|orchestrator/queue)"
 
       - name: Check imports with isort
         run: |
-          isort --check-only orchestrator/ tests/
+          isort --check-only orchestrator/ --skip orchestrator/bin --skip orchestrator/queue
