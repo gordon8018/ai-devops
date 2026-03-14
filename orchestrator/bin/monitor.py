@@ -29,6 +29,12 @@ try:
 except ImportError:
     ObsidianClient = None  # type: ignore
 
+try:
+    from reviewer import review_pr
+except ImportError:
+    def review_pr(task_id, pr_number, repo_dir):  # type: ignore[misc]
+        print(f"[WARN] reviewer module not available, skipping review for PR #{pr_number}")
+
 
 def _obsidian_search(query: str) -> list[dict]:
     """Search Obsidian for context. Returns [] if unconfigured or unreachable."""
@@ -394,6 +400,11 @@ def _process_task(t: dict, notified_ready: set) -> None:
         t["status"] = "pr_created"
         t["pr"] = pr.get("number")
         t["prUrl"] = pr.get("url")
+
+        # Trigger async PR review (non-blocking — processes fire-and-forget)
+        worktree_path = Path(t.get("worktree", ""))
+        if worktree_path.exists() and pr.get("number"):
+            review_pr(task_id, pr["number"], worktree_path)
 
     if not pr:
         # Runtime only matters before a PR exists.
