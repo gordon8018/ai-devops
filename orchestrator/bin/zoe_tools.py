@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .db import get_task, update_task
+from .db import get_task, merge_task_metadata, update_task
 from .dispatch import archive_subtasks, default_base_dir, dispatch_plan_file, plan_dir, tasks_dir
 from .errors import InvalidPlan, PlannerError, PolicyViolation
+from .monitor_helpers import restart_agent as _restart_agent
 from .planner_engine import ZoePlannerEngine
 from .plan_schema import Plan, sanitize_identifier
 
@@ -265,44 +264,6 @@ def task_status(
     return {"tasks": get_all_tasks(limit=100)}
 
 
-def _restart_agent(task: dict, worktree: Path, prompt_filename: str) -> None:
-    """Restart the agent process for a task (tmux or background process)."""
-    execution_mode = task.get("execution_mode", "tmux")
-    session = task.get("tmux_session")
-    model = task.get("model", "gpt-5.3-codex")
-    effort = task.get("effort", "high")
-    task_id = task["id"]
-
-    base = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
-    runner = str(base / "agents" / "run-codex-agent.sh")
-
-    if execution_mode == "tmux":
-        if session:
-            subprocess.run(["tmux", "kill-session", "-t", session], capture_output=True)
-        subprocess.run(
-            [
-                "tmux", "new-session", "-d", "-s", session, "-c", str(worktree),
-                f'"{runner}" "{task_id}" "{model}" "{effort}" "{worktree}" "{prompt_filename}"',
-            ],
-            check=True,
-        )
-    else:
-        old_pid = task.get("process_id")
-        if isinstance(old_pid, int) and old_pid > 0:
-            try:
-                import signal
-                os.kill(old_pid, signal.SIGTERM)
-            except OSError:
-                pass
-        subprocess.Popen(
-            [runner, task_id, model, effort, str(worktree), prompt_filename],
-            cwd=str(worktree),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-
-
 def retry_task(
     task_id: str,
     *,
@@ -347,6 +308,14 @@ def retry_task(
     _restart_agent(task, worktree, prompt_filename)
 
     new_attempts = attempts + 1
+    # 将重试上下文以增量方式写入 metadata，避免覆盖 planId/subtaskId。
+    merge_task_metadata(
+        task_id,
+        {
+            "lastRetryAt": int(time.time() * 1000),
+            "lastRetryReason": reason or "",
+        },
+    )
     updates = {
         "attempts": new_attempts,
         "status": "running",

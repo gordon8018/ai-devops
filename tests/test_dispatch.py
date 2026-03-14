@@ -11,13 +11,14 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from orchestrator.bin.dispatch import (
-    default_base_dir, queue_dir, tasks_dir, plan_dir,
+    default_base_dir, _dispatch_queue_dir as queue_dir, tasks_dir, plan_dir,
     subtask_archive_path, dispatch_state_path, execution_task_id,
     load_dispatch_state, save_dispatch_state,
     ready_subtask_ids, topologically_sorted_subtask_ids,
     build_execution_task, archive_subtasks, update_subtask_archive,
-    dispatch_ready_subtasks,
+    dispatch_ready_subtasks, dispatch_plan_file,
 )
+from orchestrator.bin.errors import DispatchError
 from orchestrator.bin.plan_schema import Plan, Subtask
 
 
@@ -127,6 +128,43 @@ class TestReadySubtasks(unittest.TestCase):
         ]
         result = ready_subtask_ids(plan, registry)
         self.assertEqual(result, {"S1"})
+
+    def test_ready_subtask_ids_parses_json_string_metadata(self):
+        """Metadata from the DB is stored as a JSON string; ready_subtask_ids must parse it."""
+        plan = make_plan()
+        registry = [
+            {
+                "status": "ready",
+                "metadata": json.dumps({"planId": "test-plan", "subtaskId": "S1"}),
+            }
+        ]
+        result = ready_subtask_ids(plan, registry)
+        self.assertEqual(result, {"S1"},
+                         "ready_subtask_ids must parse JSON-string metadata (as returned by get_all_tasks)")
+
+    def test_ready_subtask_ids_handles_merged_with_json_string_metadata(self):
+        """'merged' status tasks with JSON-string metadata must also be recognised."""
+        plan = make_plan()
+        registry = [
+            {
+                "status": "merged",
+                "metadata": json.dumps({"planId": "test-plan", "subtaskId": "S1"}),
+            }
+        ]
+        result = ready_subtask_ids(plan, registry)
+        self.assertEqual(result, {"S1"})
+
+    def test_ready_subtask_ids_ignores_unknown_subtask_id(self):
+        """metadata.subtaskId 不在计划内时不得解锁依赖。"""
+        plan = make_plan()
+        registry = [
+            {
+                "status": "ready",
+                "metadata": {"planId": "test-plan", "subtaskId": "UNKNOWN"},
+            }
+        ]
+        result = ready_subtask_ids(plan, registry)
+        self.assertEqual(result, set())
 
 
 class TestTopologicalSort(unittest.TestCase):
@@ -238,6 +276,38 @@ class TestDispatchReadySubtasks(unittest.TestCase):
         queued2 = dispatch_ready_subtasks(self.plan, base_dir=self.base, registry_items=registry)
         self.assertEqual(len(queued2), 1)
         self.assertIn("test-plan-S2", str(queued2[0]))
+
+
+class TestDispatchPlanFileHardening(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.base = Path(self.temp_dir.name)
+        self.plan_dir = self.base / "plans"
+        self.plan_dir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_dispatch_plan_file_rejects_plan_id_collision(self):
+        # 现存归档计划（同 planId，不同内容）
+        archived = make_plan(title="Old title")
+        archived_root = self.base / "tasks" / archived.plan_id
+        archived_root.mkdir(parents=True, exist_ok=True)
+        (archived_root / "plan.json").write_text(
+            json.dumps(archived.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        # 新计划文件使用同一 planId，但内容不同
+        incoming = make_plan(title="New title")
+        incoming_path = self.plan_dir / "incoming.json"
+        incoming_path.write_text(
+            json.dumps(incoming.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(DispatchError):
+            dispatch_plan_file(incoming_path, base_dir=self.base)
 
 
 if __name__ == "__main__":

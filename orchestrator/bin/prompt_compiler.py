@@ -6,8 +6,8 @@ def compile_prompt(task: dict, repo_root: Path) -> str:
     MVP: 先用模板 prompt 跑通。
     后续：如果 Zoe planner 没有提供 prompt，再在这里补更强的本地编译逻辑。
     """
-    title = task["title"]
-    desc = task["description"]
+    title = task.get("title", "")
+    desc = task.get("description", "")
 
     # 你可以在 repo 里放一个 CONTEXT.md / SPEC.md，供 prompt 自动引用
     context_files = ["SPEC.md", "CONTEXT.md", "README.md"]

@@ -3,7 +3,9 @@
 Tests for db.py (SQLite Tracker)
 """
 
+import atexit
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -14,13 +16,14 @@ sys.path.insert(0, str(SCRIPT_DIR.parent / "orchestrator" / "bin"))
 
 # Keep DB writes inside a writable temp root for unittest-style cases.
 _TEST_HOME = tempfile.mkdtemp(prefix="ai-devops-test-db-")
+atexit.register(shutil.rmtree, _TEST_HOME, True)
 os.environ["AI_DEVOPS_HOME"] = _TEST_HOME
 
 # Import after path setup
 from db import (
     get_db, init_db, insert_task, get_task, get_running_tasks,
     get_all_tasks, update_task, update_task_status, delete_task,
-    count_running_tasks, get_task_by_branch, DB_PATH,
+    count_running_tasks, get_task_by_branch, DB_PATH, merge_task_metadata,
 )
 
 
@@ -170,71 +173,99 @@ if __name__ == "__main__":
     unittest.main()
 
 
-def test_get_task_by_tmux_session(tmp_path, monkeypatch):
-    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
-    import importlib, orchestrator.bin.db as db_mod
-    importlib.reload(db_mod)
-    db_mod.init_db()
-    db_mod.insert_task({
-        "id": "t1", "repo": "r", "title": "T",
-        "tmuxSession": "agent-t1", "status": "running",
-    })
-    result = db_mod.get_task_by_tmux_session("agent-t1")
-    assert result is not None
-    assert result["id"] == "t1"
+class TestDbExtendedQueries(unittest.TestCase):
+    """Extended DB query tests (TestCase style)."""
 
-def test_get_task_by_tmux_session_miss(tmp_path, monkeypatch):
-    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
-    import importlib, orchestrator.bin.db as db_mod
-    importlib.reload(db_mod)
-    db_mod.init_db()
-    assert db_mod.get_task_by_tmux_session("nonexistent") is None
+    def setUp(self):
+        import importlib
+        self._tmp = tempfile.mkdtemp(prefix="ai-devops-test-ext-")
+        os.environ["AI_DEVOPS_HOME"] = self._tmp
+        import orchestrator.bin.db as db_mod
+        importlib.reload(db_mod)
+        db_mod.init_db()
 
-def test_get_task_by_process_id(tmp_path, monkeypatch):
-    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
-    import importlib, orchestrator.bin.db as db_mod
-    importlib.reload(db_mod)
-    db_mod.init_db()
-    db_mod.insert_task({
-        "id": "t2", "repo": "r", "title": "T",
-        "processId": 12345, "status": "running",
-    })
-    result = db_mod.get_task_by_process_id(12345)
-    assert result is not None
-    assert result["id"] == "t2"
+    def tearDown(self):
+        os.environ.pop("AI_DEVOPS_HOME", None)
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
 
-def test_mark_cleaned_up(tmp_path, monkeypatch):
-    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
-    import importlib, orchestrator.bin.db as db_mod
-    importlib.reload(db_mod)
-    db_mod.init_db()
-    db_mod.insert_task({"id": "t3", "repo": "r", "title": "T", "status": "merged"})
-    db_mod.mark_cleaned_up("t3")
-    task = db_mod.get_task("t3")
-    assert task["cleaned_up"] == 1
+    def _db(self):
+        import orchestrator.bin.db as db_mod
+        return db_mod
 
-def test_legacy_functions_removed():
-    import orchestrator.bin.db as db_mod
-    assert not hasattr(db_mod, "migrate_from_json"), \
-        "migrate_from_json must be removed"
-    assert not hasattr(db_mod, "load_registry"), \
-        "load_registry must be removed"
-    assert not hasattr(db_mod, "save_registry"), \
-        "save_registry must be removed"
+    def test_get_task_by_tmux_session(self):
+        db_mod = self._db()
+        db_mod.insert_task({
+            "id": "t1", "repo": "r", "title": "T",
+            "tmuxSession": "agent-t1", "status": "running",
+        })
+        result = db_mod.get_task_by_tmux_session("agent-t1")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["id"], "t1")
 
-def test_spawn_agent_writes_sqlite_not_json(tmp_path, monkeypatch):
-    """After daemon processes a task, active-tasks.json must NOT be created."""
-    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
-    json_registry = tmp_path / ".clawdbot" / "active-tasks.json"
-    # The JSON registry file must not be created by any startup code
-    # We check this by verifying daemon module imports don't auto-create it
-    import importlib, sys
-    # Reload db to use tmp_path
-    if "orchestrator.bin.db" in sys.modules:
-        del sys.modules["orchestrator.bin.db"]
-    import orchestrator.bin.db as db_mod
-    importlib.reload(db_mod)
-    db_mod.init_db()
-    # JSON registry must not exist
-    assert not json_registry.exists(), \
-        "active-tasks.json must not be created — SQLite only"
+    def test_get_task_by_tmux_session_miss(self):
+        self.assertIsNone(self._db().get_task_by_tmux_session("nonexistent"))
+
+    def test_get_task_by_process_id(self):
+        db_mod = self._db()
+        db_mod.insert_task({
+            "id": "t2", "repo": "r", "title": "T",
+            "processId": 12345, "status": "running",
+        })
+        result = db_mod.get_task_by_process_id(12345)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["id"], "t2")
+
+    def test_mark_cleaned_up(self):
+        db_mod = self._db()
+        db_mod.insert_task({"id": "t3", "repo": "r", "title": "T", "status": "merged"})
+        db_mod.mark_cleaned_up("t3")
+        task = db_mod.get_task("t3")
+        self.assertEqual(task["cleaned_up"], 1)
+
+    def test_legacy_functions_removed(self):
+        import orchestrator.bin.db as db_mod
+        self.assertFalse(hasattr(db_mod, "migrate_from_json"),
+                         "migrate_from_json must be removed")
+        self.assertFalse(hasattr(db_mod, "load_registry"),
+                         "load_registry must be removed")
+        self.assertFalse(hasattr(db_mod, "save_registry"),
+                         "save_registry must be removed")
+
+    def test_spawn_agent_writes_sqlite_not_json(self):
+        """After daemon processes a task, active-tasks.json must NOT be created."""
+        import importlib, sys
+        json_registry = Path(self._tmp) / ".clawdbot" / "active-tasks.json"
+        if "orchestrator.bin.db" in sys.modules:
+            del sys.modules["orchestrator.bin.db"]
+        import orchestrator.bin.db as db_mod
+        importlib.reload(db_mod)
+        db_mod.init_db()
+        self.assertFalse(json_registry.exists(),
+                         "active-tasks.json must not be created — SQLite only")
+
+    def test_merge_task_metadata_keeps_plan_fields(self):
+        db_mod = self._db()
+        db_mod.insert_task({
+            "id": "t4",
+            "repo": "r",
+            "title": "T",
+            "status": "running",
+            "metadata": {"planId": "p1", "subtaskId": "S1", "foo": "bar"},
+        })
+        merged = merge_task_metadata("t4", {"lastRetryReason": "ci failed"})
+        self.assertEqual(merged["planId"], "p1")
+        self.assertEqual(merged["subtaskId"], "S1")
+        self.assertEqual(merged["lastRetryReason"], "ci failed")
+
+    def test_merge_task_metadata_rejects_overwrite_plan_id(self):
+        db_mod = self._db()
+        db_mod.insert_task({
+            "id": "t5",
+            "repo": "r",
+            "title": "T",
+            "status": "running",
+            "metadata": {"planId": "p1", "subtaskId": "S1"},
+        })
+        with self.assertRaises(ValueError):
+            merge_task_metadata("t5", {"planId": "p2"})

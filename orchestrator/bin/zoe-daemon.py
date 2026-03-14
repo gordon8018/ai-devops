@@ -7,27 +7,37 @@ Consumes tasks from queue/, creates worktrees, and spawns coding agents.
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import time
 from pathlib import Path
 from typing import Optional
 
-BASE = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
-QUEUE = BASE / "orchestrator" / "queue"
-REPOS = BASE / "repos"
-WORKTREES = BASE / "worktrees"
+try:
+    from .config import ai_devops_home, queue_dir, repos_dir, worktrees_dir
+except ImportError:
+    from config import ai_devops_home, queue_dir, repos_dir, worktrees_dir
 
-# Import SQLite tracker
+# 导入 SQLite 跟踪模块
 try:
     from .db import init_db, get_task, insert_task
 except ImportError:
     from db import init_db, get_task, insert_task
 
-AGENT_RUNNER_CODEX = Path(os.getenv("CODEX_RUNNER_PATH", str(BASE / "agents" / "run-codex-agent.sh")))
-AGENT_RUNNER_CLAUDE = Path(os.getenv("CLAUDE_RUNNER_PATH", str(BASE / "agents" / "run-claude-agent.sh")))
 
-# Import prompt compiler (template fallback when Zoe did not provide a prompt)
+def _agent_runner_codex() -> Path:
+    return Path(os.getenv("CODEX_RUNNER_PATH", str(ai_devops_home() / "agents" / "run-codex-agent.sh")))
+
+
+def _agent_runner_claude() -> Path:
+    return Path(os.getenv("CLAUDE_RUNNER_PATH", str(ai_devops_home() / "agents" / "run-claude-agent.sh")))
+
+
+# Module-level aliases kept for test monkeypatching compatibility
+WORKTREES = worktrees_dir()
+
+# 导入提示词编译器（当 Zoe 未提供 prompt 时使用模板回退）
 from prompt_compiler import compile_prompt  # type: ignore
 
 
@@ -67,7 +77,7 @@ def tmux_has(session: str) -> bool:
 
 
 def ensure_repo(repo_name: str) -> Path:
-    repo_root = REPOS / repo_name
+    repo_root = repos_dir() / repo_name
     if not repo_root.exists():
         raise RuntimeError(
             f"Repo not found: {repo_root}\n"
@@ -76,30 +86,41 @@ def ensure_repo(repo_name: str) -> Path:
     return repo_root
 
 
-def create_worktree(repo_root: Path, branch: str) -> Path:
-    """
-    Create a worktree from origin/main into WORKTREES/<branch-with-dashes>.
-    If your default branch isn't main, change origin/main accordingly.
-    """
-    WORKTREES.mkdir(parents=True, exist_ok=True)
+def _detect_default_branch(repo_root: Path) -> str:
+    """Detect the remote default branch via git symbolic-ref.
+    Falls back to 'origin/main' if detection fails."""
+    ref = sh(
+        ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+        cwd=repo_root,
+        check=False,
+    ).strip()
+    if ref and "/" in ref:
+        return ref  # e.g. "origin/main" or "origin/develop"
+    return "origin/main"
 
-    wt_dir = WORKTREES / branch.replace("/", "-")
+
+def create_worktree(repo_root: Path, branch: str) -> Path:
+    """Create a worktree based on the detected remote default branch."""
+    wt_base = worktrees_dir()
+    wt_base.mkdir(parents=True, exist_ok=True)
+
+    wt_dir = wt_base / branch.replace("/", "-")
     if wt_dir.exists():
-        # If directory exists, treat it as already provisioned. Still ensure worktree is attached.
+        # 目录已存在时视为已完成预置，直接复用。
         return wt_dir
 
     sh(["git", "fetch", "origin"], cwd=repo_root)
 
-    # Create worktree based on origin/main
-    sh(["git", "worktree", "add", str(wt_dir), "-b", branch, "origin/main"], cwd=repo_root)
+    default_branch = _detect_default_branch(repo_root)
+    sh(["git", "worktree", "add", str(wt_dir), "-b", branch, default_branch], cwd=repo_root)
     return wt_dir
 
 
 def runner_for_agent(agent: str) -> Path:
     if agent == "codex":
-        return AGENT_RUNNER_CODEX
+        return _agent_runner_codex()
     if agent == "claude":
-        return AGENT_RUNNER_CLAUDE
+        return _agent_runner_claude()
     raise RuntimeError(f"Unsupported agent: {agent}")
 
 
@@ -124,7 +145,10 @@ def launch_agent_process(
     if tmux_available():
         if tmux_has(session):
             raise RuntimeError(f"tmux session already exists: {session}")
-        cmd = f'"{runner}" "{task["id"]}" "{model}" "{effort}" "{wt_dir}" "{prompt_txt.name}"'
+        cmd = (
+            f"{shlex.quote(str(runner))} {shlex.quote(task['id'])} {shlex.quote(model)}"
+            f" {shlex.quote(effort)} {shlex.quote(str(wt_dir))} {shlex.quote(prompt_txt.name)}"
+        )
         sh(["tmux", "new-session", "-d", "-s", session, "-c", str(wt_dir), cmd])
         return ("tmux", session, None)
 
@@ -143,11 +167,11 @@ def spawn_agent(task: dict) -> dict:
     repo_root = ensure_repo(repo_name)
     agent = str(task.get("agent", "codex"))
 
-    # Branch / worktree names
+    # 分支 / worktree 命名
     branch = resolve_branch(task)
     wt_dir = create_worktree(repo_root, branch)
 
-    # Generate prompt
+    # 生成提示词
     prompt_txt = wt_dir / "prompt.txt"
     prompt = task.get("prompt") or compile_prompt(task, wt_dir)
     prompt_txt.write_text(prompt, encoding="utf-8")
@@ -182,7 +206,7 @@ def spawn_agent(task: dict) -> dict:
         "worktreeStrategy": task.get("metadata", {}).get("worktreeStrategy") if isinstance(task.get("metadata"), dict) else None,
         "promptSource": "task.prompt" if task.get("prompt") else "prompt_compiler",
 
-        # Ralph Loop controls
+        # 重试循环控制字段
         "attempts": 0,
         "maxAttempts": int(task.get("maxAttempts", 3)),
         "promptFile": str(prompt_txt),
@@ -196,21 +220,22 @@ def spawn_agent(task: dict) -> dict:
 
 
 def main() -> None:
-    # Initialize SQLite database
+    # 初始化 SQLite 数据库
     init_db()
-    
-    QUEUE.mkdir(parents=True, exist_ok=True)
-    print(f"Zoe daemon started. Watching queue: {QUEUE}")
+
+    q = queue_dir()
+    q.mkdir(parents=True, exist_ok=True)
+    print(f"Zoe daemon started. Watching queue: {q}")
 
     while True:
-        for p in sorted(QUEUE.glob("*.json")):
+        for p in sorted(q.glob("*.json")):
             try:
                 task = json.loads(p.read_text(encoding="utf-8"))
                 if "id" not in task or "repo" not in task:
                     raise RuntimeError(f"Invalid task JSON (missing id/repo): {p}")
 
                 if get_task(task["id"]) is not None:
-                    # already tracked; remove queue item to avoid loops
+                    # 已存在跟踪记录时，删除队列项避免重复循环
                     p.unlink(missing_ok=True)
                     continue
 
@@ -223,7 +248,7 @@ def main() -> None:
                 else:
                     print(f"Spawned task {item['id']} as background process {item['processId']}")
             except Exception as e:
-                # Do NOT delete the task file; keep it for inspection/retry
+                # 不删除任务文件，保留用于排查与重试
                 print(f"[ERROR] Failed processing {p}: {e}")
 
         time.sleep(2)

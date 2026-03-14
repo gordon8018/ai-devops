@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Agent CLI - Unified command interface for AI DevOps
+Agent CLI - AI DevOps 统一命令入口
 
 Usage:
     agent spawn --repo <repo> --title <title> [--agent codex] [--model gpt-5.3-codex]
@@ -16,6 +16,7 @@ Usage:
 import argparse
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -23,17 +24,10 @@ import time
 from pathlib import Path
 from typing import Optional
 
-# Resolve paths
+# 路径初始化
 SCRIPT_DIR = Path(__file__).parent.absolute()
 
-
-def base_dir() -> Path:
-    return Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
-
-# Add orchestrator to path
-sys.path.insert(0, str(SCRIPT_DIR))
-
-# Import tool layer - use absolute imports
+# 添加 orchestrator 到导入路径
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from db import (
@@ -47,124 +41,34 @@ from db import (
     delete_task,
     count_running_tasks,
 )
+from agent_utils import (
+    base_dir,
+    queue_root,
+    generate_task_id,
+    print_table,
+    format_timestamp,
+    print_task_detail,
+)
 
-# Lazy import zoe_tools (only needed for plan/dispatch commands)
+# 延迟导入 zoe_tools（仅在 plan/dispatch 命令需要）
 def get_zoe_tools():
     import zoe_tools
     return zoe_tools
 
 
 # ============================================================================
-# Helper Functions
-# ============================================================================
-
-def generate_task_id(repo: str, title: str) -> str:
-    """Generate a unique task ID"""
-    import re
-    timestamp = str(int(time.time() * 1000))
-    repo_part = re.sub(r'[^A-Za-z0-9_-]', '-', repo.replace('/', '-'))
-    slug = re.sub(r'[^A-Za-z0-9_-]', '-', title.lower())[:48]
-    return f"{timestamp}-{repo_part}-{slug}"
-
-
-def print_table(tasks: list[dict], columns: list[str] = None) -> None:
-    """Print tasks as a formatted table"""
-    if not tasks:
-        print("No tasks found.")
-        return
-    
-    if columns is None:
-        columns = ["id", "status", "repo", "title", "agent", "started_at"]
-    
-    # Calculate column widths
-    widths = {}
-    for col in columns:
-        widths[col] = len(col)
-        for task in tasks:
-            val = str(task.get(col, "") or "")
-            if col == "started_at" and val:
-                val = format_timestamp(int(val))[:19]
-            elif col == "id" and len(val) > 20:
-                val = val[:17] + "..."
-            widths[col] = max(widths[col], len(val))
-    
-    # Print header
-    header = "  ".join(col.upper().ljust(widths[col]) for col in columns)
-    print(header)
-    print("-" * len(header))
-    
-    # Print rows
-    for task in tasks:
-        row = []
-        for col in columns:
-            val = str(task.get(col, "") or "")
-            if col == "started_at" and val:
-                val = format_timestamp(int(val))[:19]
-            elif col == "id" and len(val) > 20:
-                val = val[:17] + "..."
-            row.append(val.ljust(widths[col]))
-        print("  ".join(row))
-
-
-def format_timestamp(ts_ms: int) -> str:
-    """Format millisecond timestamp"""
-    try:
-        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts_ms / 1000))
-    except (ValueError, OSError):
-        return str(ts_ms)
-
-
-def print_task_detail(task: dict) -> None:
-    """Print detailed task information"""
-    print(f"\n{'='*60}")
-    print(f"Task: {task['id']}")
-    print(f"{'='*60}")
-    
-    fields = [
-        ("ID", "id"),
-        ("Plan", "plan_id"),
-        ("Repo", "repo"),
-        ("Title", "title"),
-        ("Status", "status"),
-        ("Agent", "agent"),
-        ("Model", "model"),
-        ("Effort", "effort"),
-        ("Branch", "branch"),
-        ("Worktree", "worktree"),
-        ("tmux Session", "tmux_session"),
-        ("PR", "pr_url"),
-        ("Attempts", "attempts"),
-        ("Started", "started_at"),
-        ("Completed", "completed_at"),
-        ("Note", "note"),
-        ("Last Failure", "last_failure"),
-    ]
-    
-    for label, key in fields:
-        val = task.get(key)
-        if val:
-            if key in ("started_at", "completed_at", "last_failure_at"):
-                val = format_timestamp(int(val))
-            elif isinstance(val, dict):
-                val = json.dumps(val, indent=2)
-            print(f"{label:15} {val}")
-    
-    print(f"{'='*60}\n")
-
-
-# ============================================================================
-# CLI Commands
+# 命令实现
 # ============================================================================
 
 def cmd_init(args):
-    """Initialize the database"""
+    """初始化数据库"""
     init_db()
     print("✓ Database initialized")
     print(f"  Location: {base_dir() / '.clawdbot' / 'agent_tasks.db'}")
 
 
 def cmd_spawn(args):
-    """Spawn a new task"""
+    """创建新任务"""
     init_db()
     
     task_id = generate_task_id(args.repo, args.title)
@@ -184,8 +88,8 @@ def cmd_spawn(args):
     
     insert_task(task)
     
-    # Write to queue
-    queue_dir = base_dir() / "orchestrator" / "queue"
+    # 写入队列
+    queue_dir = queue_root()
     queue_dir.mkdir(parents=True, exist_ok=True)
     queue_path = queue_dir / f"{task_id}.json"
     queue_path.write_text(json.dumps(task, indent=2), encoding="utf-8")
@@ -198,21 +102,21 @@ def cmd_spawn(args):
 
 
 def cmd_list(args):
-    """List tasks"""
+    """列出任务"""
     init_db()
     
     if args.status == "running":
         tasks = get_running_tasks()
     elif args.status == "queued":
-        # Queued tasks are in queue/*.json
-        queue_dir = base_dir() / "orchestrator" / "queue"
+        # 排队任务位于 queue/*.json
+        queue_dir = queue_root()
         tasks = []
         if queue_dir.exists():
             for p in queue_dir.glob("*.json"):
                 try:
                     task = json.loads(p.read_text())
                     tasks.append(task)
-                except:
+                except Exception:
                     pass
     elif args.status == "all":
         tasks = get_all_tasks(limit=args.limit)
@@ -230,7 +134,7 @@ def cmd_list(args):
 
 
 def cmd_status(args):
-    """Show task status"""
+    """查看任务状态"""
     init_db()
     
     task = get_task(args.task_id)
@@ -245,7 +149,7 @@ def cmd_status(args):
 
 
 def cmd_send(args):
-    """Send message to running agent via tmux"""
+    """通过会话管理工具向运行中的任务发送消息"""
     task = get_task(args.task_id)
     if not task:
         print(f"✗ Task not found: {args.task_id}", file=sys.stderr)
@@ -260,13 +164,13 @@ def cmd_send(args):
         print("✗ tmux not found", file=sys.stderr)
         sys.exit(1)
     
-    # Send keys to tmux session
+    # 向 tmux 会话发送按键
     subprocess.run(["tmux", "send-keys", "-t", session, args.message, "Enter"])
     print(f"✓ Message sent to {args.task_id} (tmux: {session})")
 
 
 def cmd_kill(args):
-    """Kill running task"""
+    """终止运行中的任务"""
     init_db()
     
     task = get_task(args.task_id)
@@ -278,28 +182,34 @@ def cmd_kill(args):
     if status not in ("running", "pr_created", "retrying"):
         print(f"⚠ Task is not running (status: {status})")
     
-    # Kill tmux session
+    # 结束 tmux 会话
     session = task.get("tmux_session") or task.get("tmuxSession")
     if session and shutil.which("tmux"):
         subprocess.run(["tmux", "kill-session", "-t", session], capture_output=True)
         print(f"✓ tmux session killed: {session}")
     
-    # Kill process
+    # 结束进程：先发 SIGTERM，等待 3 秒后若进程仍存活再发 SIGKILL
     process_id = task.get("process_id") or task.get("processId")
     if isinstance(process_id, int) and process_id > 0:
         try:
-            os.kill(process_id, 9)
+            os.kill(process_id, signal.SIGTERM)
+            time.sleep(3)
+            try:
+                os.kill(process_id, 0)  # 检查进程是否仍存活
+                os.kill(process_id, signal.SIGKILL)
+            except OSError:
+                pass  # SIGTERM 后已退出
             print(f"✓ Process killed: {process_id}")
         except OSError as e:
             print(f"⚠ Process already dead: {e}")
     
-    # Update status
+    # 更新状态
     update_task_status(args.task_id, "killed", "killed by user")
     print(f"✓ Task killed: {args.task_id}")
 
 
 def cmd_plan(args):
-    """Plan a task without dispatching"""
+    """仅规划任务，不下发执行"""
     init_db()
     
     task_input = {
@@ -335,7 +245,7 @@ def cmd_plan(args):
 
 
 def cmd_dispatch(args):
-    """Dispatch an existing plan"""
+    """下发已存在的计划"""
     init_db()
     
     plan_path = Path(args.plan_file)
@@ -346,8 +256,8 @@ def cmd_dispatch(args):
     try:
         zoe_tools = get_zoe_tools()
         result = zoe_tools.dispatch_plan(plan_path)
-        print(f"✓ Dispatched: {result.queued_count} tasks queued")
-        for path in result.queued:
+        print(f"✓ Dispatched: {len(result.queued_paths)} tasks queued")
+        for path in result.queued_paths:
             print(f"  - {path}")
     except Exception as e:
         print(f"✗ Dispatch failed: {e}", file=sys.stderr)
@@ -355,7 +265,7 @@ def cmd_dispatch(args):
 
 
 def cmd_plan_and_dispatch(args):
-    """Plan and dispatch in one command"""
+    """一步完成规划与下发"""
     init_db()
     
     task_input = {
@@ -386,7 +296,7 @@ def cmd_plan_and_dispatch(args):
 
 
 def cmd_retry(args):
-    """Retry a failed task"""
+    """重试失败任务"""
     init_db()
     
     task = get_task(args.task_id)
@@ -400,15 +310,15 @@ def cmd_retry(args):
             print("Use --force to retry anyway")
             sys.exit(1)
     
-    # Reset status and attempts
+    # 重置状态与重试次数
     update_task(args.task_id, {
         "status": "queued",
         "attempts": 0,
         "note": "retried by user"
     })
     
-    # Re-queue
-    queue_dir = base_dir() / "orchestrator" / "queue"
+    # 重新入队
+    queue_dir = queue_root()
     queue_dir.mkdir(parents=True, exist_ok=True)
     
     task_data = {
@@ -429,7 +339,7 @@ def cmd_retry(args):
 
 
 def cmd_clean(args):
-    """Clean up old tasks"""
+    """清理旧任务"""
     init_db()
     
     from db import get_db
@@ -437,10 +347,18 @@ def cmd_clean(args):
     cutoff_days = args.days
     cutoff_ms = int((time.time() - cutoff_days * 86400) * 1000)
     
+    _TERMINAL_STATUSES = (
+        "ready", "killed", "agent_exited",
+        "merged", "pr_closed", "needs_rebase",
+        "blocked", "agent_dead", "agent_failed",
+        "timeout", "log_stale",
+    )
+    placeholders = ",".join("?" * len(_TERMINAL_STATUSES))
     with get_db() as conn:
         cursor = conn.execute(
-            "SELECT id, status, created_at FROM agent_tasks WHERE created_at < ? AND status IN ('ready', 'killed', 'agent_exited')",
-            (cutoff_ms,)
+            f"SELECT id, status, created_at FROM agent_tasks "
+            f"WHERE created_at < ? AND status IN ({placeholders})",
+            (cutoff_ms, *_TERMINAL_STATUSES),
         )
         old_tasks = cursor.fetchall()
     
@@ -461,7 +379,7 @@ def cmd_clean(args):
 
 
 # ============================================================================
-# Main
+# 主入口
 # ============================================================================
 
 def main():
@@ -485,11 +403,11 @@ Examples:
     
     subparsers = parser.add_subparsers(dest="command", required=True, help="Available commands")
     
-    # init
+    # 初始化
     p = subparsers.add_parser("init", help="Initialize the database")
     p.set_defaults(func=cmd_init)
     
-    # spawn
+    # 创建任务
     p = subparsers.add_parser("spawn", help="Spawn a new task")
     p.add_argument("--repo", required=True, help="Repository name")
     p.add_argument("--title", required=True, help="Task title")
@@ -500,31 +418,31 @@ Examples:
     p.add_argument("--files", help="Comma-separated file hints")
     p.set_defaults(func=cmd_spawn)
     
-    # list
+    # 列表
     p = subparsers.add_parser("list", help="List tasks")
     p.add_argument("--status", default="all", choices=["all", "running", "queued", "ready", "blocked"])
     p.add_argument("--limit", type=int, default=20, help="Max tasks to show")
     p.add_argument("--json", action="store_true", help="Output as JSON")
     p.set_defaults(func=cmd_list)
     
-    # status
+    # 状态
     p = subparsers.add_parser("status", help="Show task status")
     p.add_argument("task_id", help="Task ID")
     p.add_argument("--json", action="store_true", help="Output as JSON")
     p.set_defaults(func=cmd_status)
     
-    # send
+    # 发送消息
     p = subparsers.add_parser("send", help="Send message to running agent")
     p.add_argument("task_id", help="Task ID")
     p.add_argument("message", help="Message to send")
     p.set_defaults(func=cmd_send)
     
-    # kill
+    # 终止任务
     p = subparsers.add_parser("kill", help="Kill running task")
     p.add_argument("task_id", help="Task ID")
     p.set_defaults(func=cmd_kill)
     
-    # plan
+    # 规划
     p = subparsers.add_parser("plan", help="Plan a task without dispatching")
     p.add_argument("--repo", required=True)
     p.add_argument("--title", required=True)
@@ -537,12 +455,12 @@ Examples:
     p.add_argument("--quiet", "-q", action="store_true")
     p.set_defaults(func=cmd_plan)
     
-    # dispatch
+    # 下发
     p = subparsers.add_parser("dispatch", help="Dispatch existing plan")
     p.add_argument("--plan", dest="plan_file", required=True, help="Path to plan.json")
     p.set_defaults(func=cmd_dispatch)
     
-    # plan-and-dispatch
+    # 规划并下发
     p = subparsers.add_parser("plan-and-dispatch", help="Plan and dispatch in one command")
     p.add_argument("--repo", required=True)
     p.add_argument("--title", required=True)
@@ -555,13 +473,13 @@ Examples:
     p.add_argument("--quiet", "-q", action="store_true")
     p.set_defaults(func=cmd_plan_and_dispatch)
     
-    # retry
+    # 重试
     p = subparsers.add_parser("retry", help="Retry a failed task")
     p.add_argument("task_id", help="Task ID")
     p.add_argument("--force", "-f", action="store_true")
     p.set_defaults(func=cmd_retry)
     
-    # clean
+    # 清理
     p = subparsers.add_parser("clean", help="Clean up old tasks")
     p.add_argument("--days", type=int, default=30, help="Delete tasks older than N days")
     p.add_argument("--dry-run", action="store_true")

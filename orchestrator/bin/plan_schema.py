@@ -265,20 +265,21 @@ class Plan:
             for dep in subtask.depends_on:
                 adjacency[dep].append(subtask.id)
 
-        ready = [
+        ready: deque[str] = deque(
             subtask.id for subtask in self.subtasks if indegree[subtask.id] == 0
-        ]
-        ready.sort(key=original_order.get)
+        )
 
         ordered: list[Subtask] = []
         while ready:
-            current = ready.pop(0)
+            current = ready.popleft()
             ordered.append(self.subtasks_by_id[current])
+            new_ready: list[str] = []
             for child in adjacency[current]:
                 indegree[child] -= 1
                 if indegree[child] == 0:
-                    ready.append(child)
-            ready.sort(key=original_order.get)
+                    new_ready.append(child)
+            new_ready.sort(key=original_order.get)
+            ready.extend(new_ready)
 
         if len(ordered) != len(self.subtasks):
             raise InvalidPlan("Subtask dependency graph contains a cycle")

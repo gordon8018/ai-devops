@@ -52,6 +52,7 @@ def test_retry_task_success(tmp_path):
 
     with patch("orchestrator.bin.zoe_tools.get_task", return_value=task), \
          patch("orchestrator.bin.zoe_tools.update_task") as mock_update, \
+         patch("orchestrator.bin.zoe_tools.merge_task_metadata") as mock_merge_meta, \
          patch("orchestrator.bin.zoe_tools._restart_agent") as mock_restart:
         mock_update.return_value = None
         result = retry_task("task-123", reason="manual retry test")
@@ -70,6 +71,7 @@ def test_retry_task_success(tmp_path):
         "status": "running",
         "note": "retry #2 triggered (manual)",
     })
+    mock_merge_meta.assert_called_once()
     mock_restart.assert_called_once()
 
     assert result["status"] == "running"

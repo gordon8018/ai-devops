@@ -491,7 +491,10 @@ def _build_prompt(
     success_patterns = constraints.get("successPatterns") or []
     if success_patterns:
         lines.extend(["", "PAST SUCCESSES (approaches that worked before):"])
-        lines.extend(f"- {p['title']} (succeeded in {p['attemptCount']} attempt(s))" for p in success_patterns[:3])
+        lines.extend(
+            f"- {p.get('title', '(unknown)')} (succeeded in {p.get('attemptCount', '?')} attempt(s))"
+            for p in success_patterns[:3]
+        )
     lines.extend(
         [
             "",

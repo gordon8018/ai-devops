@@ -42,17 +42,18 @@ def monitor_script_path() -> Path:
 
 MONITOR_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="webhook-monitor")
 
-# Add orchestrator to path
-sys.path.insert(0, str(base_dir() / "orchestrator" / "bin"))
-
 # Import database
 try:
-    from db import init_db, get_task_by_branch, update_task
-except ImportError:
     from orchestrator.bin.db import init_db, get_task_by_branch, update_task
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).parent))
+    from db import init_db, get_task_by_branch, update_task
 
 
 WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "").encode()
+
+# Rotate webhook.log when it exceeds this size (default 10 MiB)
+MAX_LOG_BYTES: int = int(os.getenv("WEBHOOK_MAX_LOG_BYTES", str(10 * 1024 * 1024)))
 
 
 def verify_signature(payload: bytes, signature: str) -> bool:
@@ -75,19 +76,22 @@ def verify_signature(payload: bytes, signature: str) -> bool:
 
 
 def log_event(event_type: str, action: str, data: Dict[str, Any]) -> None:
-    """Log webhook event to file"""
+    """Log webhook event to file, rotating when the file exceeds MAX_LOG_BYTES."""
     logs = log_dir()
     logs.mkdir(parents=True, exist_ok=True)
     log_file = logs / "webhook.log"
-    
+
+    if log_file.exists() and log_file.stat().st_size > MAX_LOG_BYTES:
+        log_file.replace(logs / "webhook.log.1")
+
     log_entry = {
         "timestamp": int(time.time() * 1000),
         "event": event_type,
         "action": action,
         "data": data,
     }
-    
-    with open(log_file, "a") as f:
+
+    with open(log_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(log_entry) + "\n")
 
 
@@ -345,16 +349,16 @@ class GitHubWebhookHandler(BaseHTTPRequestHandler):
         print(f"[HTTP] {self.client_address[0]} - {format % args}")
 
 
-def run_server(port: int, daemon: bool = False) -> None:
+def run_server(port: int, daemon: bool = False, host: str = "0.0.0.0") -> None:
     """Run the webhook server"""
     # Initialize database
     init_db()
-    
-    server = HTTPServer(("0.0.0.0", port), GitHubWebhookHandler)
+
+    server = HTTPServer((host, port), GitHubWebhookHandler)
     print(f"{'='*60}")
     print(f"GitHub Webhook Server")
     print(f"{'='*60}")
-    print(f"Listening on: http://0.0.0.0:{port}")
+    print(f"Listening on: http://{host}:{port}")
     print(f"Base directory: {base_dir()}")
     print(f"Log file: {log_dir() / 'webhook.log'}")
     print(f"Secret configured: {'Yes' if WEBHOOK_SECRET else 'No'}")
@@ -407,6 +411,7 @@ GitHub Configuration:
     )
     
     parser.add_argument("--port", type=int, default=8080, help="Port to listen on (default: 8080)")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0; use 127.0.0.1 behind a reverse proxy)")
     parser.add_argument("--secret", default="", help="Webhook secret (or use GITHUB_WEBHOOK_SECRET env)")
     parser.add_argument("--daemon", action="store_true", help="Run in background (daemon mode)")
     
@@ -426,7 +431,7 @@ GitHub Configuration:
         sys.exit(2)
     
     # Run server
-    run_server(args.port, daemon=args.daemon)
+    run_server(args.port, daemon=args.daemon, host=args.host)
 
 
 if __name__ == "__main__":

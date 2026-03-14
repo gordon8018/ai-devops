@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
@@ -170,7 +171,7 @@ def insert_task(task: dict) -> None:
             task.get("attempts", 0),
             task.get("maxAttempts") or task.get("max_attempts", 3),
             json.dumps(task.get("metadata", {})),
-            int(__import__("time").time() * 1000)
+            int(time.time() * 1000)
         ))
         conn.commit()
 
@@ -184,6 +185,46 @@ def get_task(task_id: str) -> Optional[dict]:
         )
         row = cursor.fetchone()
         return dict(row) if row else None
+
+
+def _parse_metadata(raw_metadata: Any) -> dict[str, Any]:
+    """将 metadata 统一解析为 dict，异常时返回空字典。"""
+    if isinstance(raw_metadata, dict):
+        return dict(raw_metadata)
+    if isinstance(raw_metadata, str):
+        try:
+            parsed = json.loads(raw_metadata)
+        except (json.JSONDecodeError, ValueError):
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def merge_task_metadata(task_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+    """合并 metadata，并保护 planId/subtaskId 不被意外覆盖。"""
+    if not isinstance(patch, dict):
+        raise ValueError("metadata patch must be a dict")
+    task = get_task(task_id)
+    if task is None:
+        raise ValueError(f"Task not found: {task_id}")
+
+    existing = _parse_metadata(task.get("metadata"))
+    merged = dict(existing)
+    merged.update(patch)
+
+    # 关键路由字段一旦存在，后续更新只能保持一致，避免打断 dispatch 依赖链。
+    for key in ("planId", "subtaskId"):
+        existing_value = existing.get(key)
+        if existing_value is None:
+            continue
+        patch_value = patch.get(key, existing_value)
+        if patch_value != existing_value:
+            raise ValueError(f"metadata.{key} cannot be overwritten for task {task_id}")
+        merged[key] = existing_value
+
+    update_task(task_id, {"metadata": merged})
+    return merged
 
 
 def get_task_by_branch(branch: str) -> Optional[dict]:
@@ -286,7 +327,7 @@ def update_task(task_id: str, updates: dict) -> None:
         return
     
     fields.append("updated_at = ?")
-    values.append(int(__import__("time").time() * 1000))
+    values.append(int(time.time() * 1000))
     values.append(task_id)
     
     with get_db() as conn:

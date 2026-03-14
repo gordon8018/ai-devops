@@ -7,6 +7,11 @@ import time
 from typing import Any
 
 try:
+    from .config import ai_devops_home
+except ImportError:
+    from config import ai_devops_home
+
+try:
     from .db import init_db, get_all_tasks
 except ImportError:
     from db import init_db, get_all_tasks
@@ -20,10 +25,10 @@ except ImportError:
 
 
 def default_base_dir() -> Path:
-    return Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
+    return ai_devops_home()
 
 
-def queue_dir(base_dir: Path | None = None) -> Path:
+def _dispatch_queue_dir(base_dir: Path | None = None) -> Path:
     root = base_dir or default_base_dir()
     return root / "orchestrator" / "queue"
 
@@ -62,14 +67,60 @@ def save_dispatch_state(plan: Plan, state: dict[str, Any], base_dir: Path | None
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _canonical_json(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _validate_plan_id_collision(plan: Plan, base_dir: Path) -> None:
+    """防止不同计划复用同一 planId，导致依赖链串扰。"""
+    archived_plan_file = plan_dir(plan, base_dir) / "plan.json"
+    if not archived_plan_file.exists():
+        return
+    try:
+        archived_payload = json.loads(archived_plan_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DispatchError(f"Invalid archived plan file: {archived_plan_file}") from exc
+    if not isinstance(archived_payload, dict):
+        raise DispatchError(f"Invalid archived plan payload: {archived_plan_file}")
+    if _canonical_json(archived_payload) != _canonical_json(plan.to_dict()):
+        raise DispatchError(
+            f"planId collision detected for {plan.plan_id}: "
+            f"existing archived plan differs from {plan_dir(plan, base_dir) / 'plan.json'}"
+        )
+
+
+# Statuses that indicate a subtask's execution task has reached a terminal
+# success state.  Both "ready" (CI green, PR open) and "merged" (PR merged)
+# unblock downstream dependencies.
+_COMPLETED_STATUSES: frozenset[str] = frozenset({"ready", "merged"})
+
+
+def _extract_plan_metadata(raw_meta: Any) -> dict[str, Any]:
+    if isinstance(raw_meta, str):
+        try:
+            parsed = json.loads(raw_meta)
+        except (json.JSONDecodeError, ValueError):
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+        return {}
+    if isinstance(raw_meta, dict):
+        return raw_meta
+    return {}
+
+
 def ready_subtask_ids(plan: Plan, registry_items: list[dict[str, Any]]) -> set[str]:
+    known_subtasks = {subtask.id for subtask in plan.subtasks}
     ready: set[str] = set()
     for item in registry_items:
-        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        metadata = _extract_plan_metadata(item.get("metadata"))
         if metadata.get("planId") != plan.plan_id:
             continue
-        if item.get("status") == "ready" and isinstance(metadata.get("subtaskId"), str):
-            ready.add(metadata["subtaskId"])
+        subtask_id = metadata.get("subtaskId")
+        if not isinstance(subtask_id, str) or subtask_id not in known_subtasks:
+            continue
+        if item.get("status") in _COMPLETED_STATUSES:
+            ready.add(subtask_id)
     return ready
 
 
@@ -149,7 +200,7 @@ def dispatch_ready_subtasks(
     registry_items: list[dict[str, Any]] | None = None,
 ) -> list[Path]:
     root = base_dir or default_base_dir()
-    queue_root = queue_dir(root)
+    queue_root = _dispatch_queue_dir(root)
     queue_root.mkdir(parents=True, exist_ok=True)
     if registry_items is None:
         try:
@@ -221,10 +272,12 @@ def dispatch_plan_file(
     poll_interval_sec: float = 5.0,
 ) -> list[Path]:
     plan = load_plan(plan_file)
-    archive_subtasks(plan, base_dir)
+    root = base_dir or default_base_dir()
+    _validate_plan_id_collision(plan, root)
+    archive_subtasks(plan, root)
     if watch:
-        return watch_and_dispatch(plan, base_dir=base_dir, poll_interval_sec=poll_interval_sec)
-    return dispatch_ready_subtasks(plan, base_dir=base_dir)
+        return watch_and_dispatch(plan, base_dir=root, poll_interval_sec=poll_interval_sec)
+    return dispatch_ready_subtasks(plan, base_dir=root)
 
 
 def load_plan_for_dispatch(plan_file: Path) -> Plan:

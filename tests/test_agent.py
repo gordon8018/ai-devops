@@ -18,11 +18,9 @@ SCRIPT_DIR = Path(__file__).parent.absolute()
 BASE = SCRIPT_DIR.parent
 sys.path.insert(0, str(BASE / "orchestrator" / "bin"))
 
-from agent import (
-    generate_task_id, print_table, format_timestamp, print_task_detail,
-    cmd_init, cmd_spawn, cmd_list, cmd_status,
-)
-from db import init_db, get_task, get_all_tasks
+from agent import cmd_init, cmd_spawn, cmd_list, cmd_status, cmd_retry
+from agent_utils import generate_task_id, print_table, format_timestamp, print_task_detail
+from db import init_db, get_task, get_all_tasks, update_task
 
 
 class TestTaskIdGeneration(unittest.TestCase):
@@ -83,7 +81,7 @@ class TestAgentCommands(unittest.TestCase):
         self.base = Path(self.temp_dir.name)
         os.environ["AI_DEVOPS_HOME"] = str(self.base)
         init_db()
-        # Clean up any existing tasks
+        # 清理已有任务
         from db import get_db
         with get_db() as conn:
             conn.execute("DELETE FROM agent_tasks")
@@ -189,6 +187,37 @@ class TestAgentSpawnEdgeCases(unittest.TestCase):
         queue_dir = self.base / "orchestrator" / "queue"
         queue_files = list(queue_dir.glob("*.json"))
         self.assertGreater(len(queue_files), 0)
+
+    def test_cmd_retry_requires_force_for_non_retry_status(self):
+        args = MagicMock(
+            repo="test/repo", title="Retry Me",
+            agent="codex", model="gpt-5.3-codex", effort="medium",
+            description="", files=None,
+        )
+        cmd_spawn(args)
+        task = get_all_tasks()[0]
+        retry_args = MagicMock(task_id=task["id"], force=False)
+        with self.assertRaises(SystemExit):
+            cmd_retry(retry_args)
+
+    def test_cmd_retry_force_requeues_task(self):
+        args = MagicMock(
+            repo="test/repo", title="Retry Force",
+            agent="codex", model="gpt-5.3-codex", effort="medium",
+            description="", files=None,
+        )
+        cmd_spawn(args)
+        task = get_all_tasks()[0]
+        update_task(task["id"], {"status": "running", "attempts": 2})
+
+        retry_args = MagicMock(task_id=task["id"], force=True)
+        cmd_retry(retry_args)
+
+        updated = get_task(task["id"])
+        self.assertEqual(updated["status"], "queued")
+        self.assertEqual(updated["attempts"], 0)
+        queue_files = list((self.base / "orchestrator" / "queue").glob("*.json"))
+        self.assertGreaterEqual(len(queue_files), 1)
 
 
 if __name__ == "__main__":
