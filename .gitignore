@@ -21,3 +21,4 @@ coverage/
 Thumbs.db
 
 logs/
+orchestrator/queue/*.json
