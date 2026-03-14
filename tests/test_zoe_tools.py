@@ -1,6 +1,8 @@
 import json
+import os
 
 from orchestrator.bin.zoe_tools import list_plans, plan_and_dispatch_task, task_status
+from orchestrator.bin.db import init_db, insert_task
 
 
 def make_task_input() -> dict[str, object]:
@@ -35,7 +37,7 @@ def test_plan_and_dispatch_task_archives_plan_and_queues_first_subtask(tmp_path,
     assert queue_payload["metadata"]["planId"] == result.plan.plan_id
 
 
-def test_task_status_and_list_plans_read_tool_layer_state(tmp_path) -> None:
+def test_task_status_and_list_plans_read_tool_layer_state(tmp_path, monkeypatch) -> None:
     base = tmp_path / "ai-devops"
     tasks_root = base / "tasks" / "1730000000000-demo-repo-fix-auth"
     tasks_root.mkdir(parents=True)
@@ -73,25 +75,19 @@ def test_task_status_and_list_plans_read_tool_layer_state(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    registry_path = base / ".clawdbot" / "active-tasks.json"
-    registry_path.parent.mkdir(parents=True)
-    registry_path.write_text(
-        json.dumps(
-            [
-                {
-                    "id": "1730000000000-demo-repo-fix-auth-S1",
-                    "status": "running",
-                    "metadata": {
-                        "planId": "1730000000000-demo-repo-fix-auth",
-                        "subtaskId": "S1",
-                    },
-                }
-            ],
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    # Set up database instead of JSON registry
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(base))
+    init_db()
+    insert_task({
+        "id": "1730000000000-demo-repo-fix-auth-S1",
+        "status": "running",
+        "repo": "demo-repo",
+        "title": "Fix auth flow - S1",
+        "planId": "1730000000000-demo-repo-fix-auth",
+        "metadata": {
+            "subtaskId": "S1",
+        },
+    })
 
     plans_result = list_plans(base_dir=base, limit=5)
     assert plans_result["plans"][0]["planId"] == "1730000000000-demo-repo-fix-auth"

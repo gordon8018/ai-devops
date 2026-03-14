@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .dispatch import archive_subtasks, default_base_dir, dispatch_plan_file, plan_dir, registry_file, tasks_dir
+from .dispatch import archive_subtasks, default_base_dir, dispatch_plan_file, plan_dir, tasks_dir
 from .errors import InvalidPlan, PlannerError, PolicyViolation
 from .planner_engine import ZoePlannerEngine
 from .plan_schema import Plan, sanitize_identifier
@@ -212,41 +212,27 @@ def read_json_file(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _load_registry(base_dir: Path | None = None) -> list[dict[str, Any]]:
-    path = registry_file(base_dir)
-    if not path.exists():
-        return []
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise PlannerError(f"Registry file is not valid JSON: {path}") from exc
-    if not isinstance(payload, list):
-        raise PlannerError(f"Registry file must contain a JSON array: {path}")
-    return [item for item in payload if isinstance(item, dict)]
-
-
 def task_status(
     *,
     task_id: str | None = None,
     plan_id: str | None = None,
     base_dir: Path | None = None,
 ) -> dict[str, Any]:
-    items = _load_registry(base_dir)
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from db import get_task, get_tasks_by_plan, get_all_tasks  # type: ignore
+
     if task_id:
-        for item in items:
-            if item.get("id") == task_id:
-                return {"task": item}
-        raise PlannerError(f"Task not found in registry: {task_id}")
+        item = get_task(task_id)
+        if item is None:
+            raise PlannerError(f"Task not found in registry: {task_id}")
+        return {"task": item}
 
     if plan_id:
-        matching = [
-            item for item in items
-            if isinstance(item.get("metadata"), dict)
-            and item["metadata"].get("planId") == plan_id
-        ]
+        matching = get_tasks_by_plan(plan_id)
         return {"planId": plan_id, "tasks": matching}
 
-    return {"tasks": items}
+    return {"tasks": get_all_tasks(limit=100)}
 
 
 def list_plans(*, base_dir: Path | None = None, limit: int = 10) -> dict[str, Any]:
