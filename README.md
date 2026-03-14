@@ -4,6 +4,8 @@ Zoe tool layer for planning, dispatching, and running coding agents against loca
 
 [![CI](https://github.com/gordon8018/ai-devops/actions/workflows/ci.yml/badge.svg)](https://github.com/gordon8018/ai-devops/actions/workflows/ci.yml)
 
+Language: **English** | [简体中文](README.zh-CN.md)
+
 
 ## What This Repo Does
 
