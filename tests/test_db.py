@@ -204,3 +204,12 @@ def test_mark_cleaned_up(tmp_path, monkeypatch):
     db_mod.mark_cleaned_up("t3")
     task = db_mod.get_task("t3")
     assert task["cleaned_up"] == 1
+
+def test_legacy_functions_removed():
+    import orchestrator.bin.db as db_mod
+    assert not hasattr(db_mod, "migrate_from_json"), \
+        "migrate_from_json must be removed"
+    assert not hasattr(db_mod, "load_registry"), \
+        "load_registry must be removed"
+    assert not hasattr(db_mod, "save_registry"), \
+        "save_registry must be removed"
