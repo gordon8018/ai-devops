@@ -160,3 +160,47 @@ class TestTaskStatusTransitions(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_get_task_by_tmux_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
+    import importlib, orchestrator.bin.db as db_mod
+    importlib.reload(db_mod)
+    db_mod.init_db()
+    db_mod.insert_task({
+        "id": "t1", "repo": "r", "title": "T",
+        "tmuxSession": "agent-t1", "status": "running",
+    })
+    result = db_mod.get_task_by_tmux_session("agent-t1")
+    assert result is not None
+    assert result["id"] == "t1"
+
+def test_get_task_by_tmux_session_miss(tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
+    import importlib, orchestrator.bin.db as db_mod
+    importlib.reload(db_mod)
+    db_mod.init_db()
+    assert db_mod.get_task_by_tmux_session("nonexistent") is None
+
+def test_get_task_by_process_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
+    import importlib, orchestrator.bin.db as db_mod
+    importlib.reload(db_mod)
+    db_mod.init_db()
+    db_mod.insert_task({
+        "id": "t2", "repo": "r", "title": "T",
+        "processId": 12345, "status": "running",
+    })
+    result = db_mod.get_task_by_process_id(12345)
+    assert result is not None
+    assert result["id"] == "t2"
+
+def test_mark_cleaned_up(tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
+    import importlib, orchestrator.bin.db as db_mod
+    importlib.reload(db_mod)
+    db_mod.init_db()
+    db_mod.insert_task({"id": "t3", "repo": "r", "title": "T", "status": "merged"})
+    db_mod.mark_cleaned_up("t3")
+    task = db_mod.get_task("t3")
+    assert task["cleaned_up"] == 1
