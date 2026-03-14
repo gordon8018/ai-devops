@@ -218,9 +218,7 @@ def task_status(
     plan_id: str | None = None,
     base_dir: Path | None = None,
 ) -> dict[str, Any]:
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).parent))
-    from db import get_task, get_tasks_by_plan, get_all_tasks  # type: ignore
+    from .db import get_task, get_tasks_by_plan, get_all_tasks
 
     if task_id:
         item = get_task(task_id)

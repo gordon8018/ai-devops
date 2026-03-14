@@ -656,6 +656,11 @@ def _plan_analysis_task(
         global_dod,
     )
     files_hint = list(profile.files_hint)
+    if not files_hint:
+        discovered = _discover_repo_phase_hints(repo)
+        files_hint = discovered["implementation"] + discovered["docs"]
+    if not files_hint:
+        files_hint = ["src/", "README.md"]
     prompt = _build_prompt(
         repo=repo,
         plan_title=title,

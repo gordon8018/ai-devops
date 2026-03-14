@@ -18,14 +18,19 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-BASE = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
-DB_PATH = BASE / ".clawdbot" / "agent_tasks.db"
+def _db_path() -> Path:
+    base = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
+    return base / ".clawdbot" / "agent_tasks.db"
+
+
+# Module-level alias for external code that reads DB_PATH directly (e.g. tests, scripts)
+DB_PATH = _db_path()
 
 
 @contextmanager
 def get_db():
     """Get database connection with row factory"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(_db_path())
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -35,7 +40,7 @@ def get_db():
 
 def init_db() -> None:
     """Initialize database schema"""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _db_path().parent.mkdir(parents=True, exist_ok=True)
 
     with get_db() as conn:
         conn.execute("""
