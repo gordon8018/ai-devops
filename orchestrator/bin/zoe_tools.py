@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .db import get_task, update_task
 from .dispatch import archive_subtasks, default_base_dir, dispatch_plan_file, plan_dir, tasks_dir
 from .errors import InvalidPlan, PlannerError, PolicyViolation
 from .planner_engine import ZoePlannerEngine
@@ -231,6 +233,98 @@ def task_status(
         return {"planId": plan_id, "tasks": matching}
 
     return {"tasks": get_all_tasks(limit=100)}
+
+
+def _restart_agent(task: dict, worktree: Path, prompt_filename: str) -> None:
+    """Restart the agent process for a task (tmux or background process)."""
+    execution_mode = task.get("execution_mode", "tmux")
+    session = task.get("tmux_session")
+    model = task.get("model", "gpt-5.3-codex")
+    effort = task.get("effort", "high")
+    task_id = task["id"]
+
+    base = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
+    runner = str(base / "agents" / "run-codex-agent.sh")
+
+    if execution_mode == "tmux":
+        if session:
+            subprocess.run(["tmux", "kill-session", "-t", session], capture_output=True)
+        subprocess.run(
+            [
+                "tmux", "new-session", "-d", "-s", session, "-c", str(worktree),
+                f'"{runner}" "{task_id}" "{model}" "{effort}" "{worktree}" "{prompt_filename}"',
+            ],
+            check=True,
+        )
+    else:
+        old_pid = task.get("process_id")
+        if isinstance(old_pid, int) and old_pid > 0:
+            try:
+                import signal
+                os.kill(old_pid, signal.SIGTERM)
+            except OSError:
+                pass
+        subprocess.Popen(
+            [runner, task_id, model, effort, str(worktree), prompt_filename],
+            cwd=str(worktree),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+
+def retry_task(
+    task_id: str,
+    *,
+    reason: str = "",
+    base_dir: Path | None = None,
+) -> dict[str, Any]:
+    """
+    Manually trigger a retry for a task.
+    Reads the original prompt, appends retry directive, restarts the agent.
+    Returns updated task dict.
+    """
+    task = get_task(task_id)
+    if task is None:
+        raise PlannerError(f"Task not found: {task_id}")
+
+    valid_statuses = ("blocked", "agent_dead", "agent_failed")
+    if task["status"] not in valid_statuses:
+        raise PlannerError(
+            f"Cannot retry task with status '{task['status']}'; "
+            f"must be one of: {', '.join(valid_statuses)}"
+        )
+
+    attempts = task.get("attempts", 0) or 0
+    max_attempts = task.get("max_attempts", 3) or 3
+    if attempts >= max_attempts:
+        raise PlannerError(
+            f"Task has exceeded max attempts ({attempts}/{max_attempts})"
+        )
+
+    worktree = Path(task["worktree"])
+    original_prompt = (worktree / "prompt.txt").read_text(encoding="utf-8")
+
+    retry_n = attempts + 1
+    retry_directive = (
+        f"\n\nRERUN DIRECTIVE (Manual Retry #{retry_n}, reason: {reason or 'none'}):\n"
+        "Make CI green. Read the failing logs, apply a minimal fix, push to the same branch."
+    )
+    retry_content = original_prompt + retry_directive
+    prompt_filename = f"prompt.retry{retry_n}.txt"
+    (worktree / prompt_filename).write_text(retry_content, encoding="utf-8")
+
+    _restart_agent(task, worktree, prompt_filename)
+
+    new_attempts = attempts + 1
+    updates = {
+        "attempts": new_attempts,
+        "status": "running",
+        "note": f"retry #{retry_n} triggered (manual)",
+    }
+    update_task(task_id, updates)
+
+    return {**task, **updates}
 
 
 def list_plans(*, base_dir: Path | None = None, limit: int = 10) -> dict[str, Any]:

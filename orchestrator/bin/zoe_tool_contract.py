@@ -143,6 +143,27 @@ TOOL_CONTRACTS: tuple[dict[str, Any], ...] = (
             "additionalProperties": False,
         },
     },
+    {
+        "name": "retry_task",
+        "description": "Manually retry a failed or blocked task by task_id. Restarts the agent with a retry prompt.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["task_id"],
+            "properties": {
+                "task_id": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+        "resultSchema": {
+            "type": "object",
+            "required": ["task"],
+            "properties": {
+                "task": {"type": "object"},
+            },
+            "additionalProperties": False,
+        },
+    },
 )
 
 

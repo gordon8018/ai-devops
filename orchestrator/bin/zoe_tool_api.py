@@ -18,6 +18,7 @@ from orchestrator.bin.zoe_tools import (
     list_plans,
     plan_and_dispatch_task,
     plan_task,
+    retry_task,
     task_status,
 )
 
@@ -77,6 +78,11 @@ def _dispatch_tool_call(payload: dict[str, Any], *, base_dir: Path) -> dict[str,
     if tool == "list_plans":
         limit = int(args.get("limit", 10))
         return list_plans(base_dir=base_dir, limit=limit)
+    if tool == "retry_task":
+        task_id = args.get("task_id")
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise PlannerError("retry_task requires args.task_id")
+        return {"task": retry_task(task_id, reason=str(args.get("reason", "")))}
     raise PlannerError(f"Tool handler not implemented: {tool}")
 
 

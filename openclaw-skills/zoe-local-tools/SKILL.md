@@ -43,6 +43,7 @@ Prefer `--args-file` for any non-trivial payload so shell quoting does not corru
 - `dispatch_plan`: dispatch from an existing `plan.json`
 - `task_status`: inspect one task, one plan, or the whole active registry
 - `list_plans`: list recent archived plans
+- `retry_task`: manually retry a failed or blocked task by task_id
 
 3. For planning requests, send a complete payload. Minimum useful fields:
 
@@ -98,6 +99,15 @@ cat >/tmp/zoe-tool-args.json <<'JSON'
 {"limit":5}
 JSON
 {baseDir}/scripts/invoke_zoe_tool.sh call list_plans --args-file /tmp/zoe-tool-args.json
+```
+
+5. To retry a failed or blocked task:
+
+```bash
+cat >/tmp/zoe-tool-args.json <<'JSON'
+{"task_id": "<task-id>", "reason": "Manual retry after investigating root cause"}
+JSON
+{baseDir}/scripts/invoke_zoe_tool.sh call retry_task --args-file /tmp/zoe-tool-args.json
 ```
 
 ## Response Handling
