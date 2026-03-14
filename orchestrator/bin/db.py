@@ -18,19 +18,53 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-def _db_path() -> Path:
-    base = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
+
+_INITIAL_BASE = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
+
+
+def _resolve_base_dir() -> Path:
+    env_base = os.getenv("AI_DEVOPS_HOME")
+    if env_base:
+        return Path(env_base)
+    return _INITIAL_BASE
+
+
+def _resolve_db_path() -> Path:
+    base = _resolve_base_dir()
     return base / ".clawdbot" / "agent_tasks.db"
 
 
+class _DynamicDBPath(os.PathLike[str]):
+    """Path-like proxy that always resolves against current AI_DEVOPS_HOME."""
+
+    def _path(self) -> Path:
+        return _resolve_db_path()
+
+    def __fspath__(self) -> str:
+        return str(self._path())
+
+    def __str__(self) -> str:
+        return str(self._path())
+
+    def __repr__(self) -> str:
+        return f"DynamicDBPath({self._path()!s})"
+
+    @property
+    def parent(self) -> Path:
+        return self._path().parent
+
+    def exists(self) -> bool:
+        return self._path().exists()
+
+
 # Module-level alias for external code that reads DB_PATH directly (e.g. tests, scripts)
-DB_PATH = _db_path()
+DB_PATH = _DynamicDBPath()
 
 
 @contextmanager
 def get_db():
     """Get database connection with row factory"""
-    conn = sqlite3.connect(_db_path())
+    conn = sqlite3.connect(os.fspath(DB_PATH))
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -40,7 +74,7 @@ def get_db():
 
 def init_db() -> None:
     """Initialize database schema"""
-    _db_path().parent.mkdir(parents=True, exist_ok=True)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     with get_db() as conn:
         conn.execute("""
