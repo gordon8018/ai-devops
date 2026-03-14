@@ -12,6 +12,10 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent.absolute()
 sys.path.insert(0, str(SCRIPT_DIR.parent / "orchestrator" / "bin"))
 
+# Keep DB writes inside a writable temp root for unittest-style cases.
+_TEST_HOME = tempfile.mkdtemp(prefix="ai-devops-test-db-")
+os.environ["AI_DEVOPS_HOME"] = _TEST_HOME
+
 # Import after path setup
 from db import (
     get_db, init_db, insert_task, get_task, get_running_tasks,
@@ -29,6 +33,7 @@ def cleanup_db():
 
 class TestDatabaseInit(unittest.TestCase):
     def setUp(self):
+        os.environ["AI_DEVOPS_HOME"] = _TEST_HOME
         init_db()
         cleanup_db()
 
@@ -62,6 +67,7 @@ class TestDatabaseInit(unittest.TestCase):
 
 class TestTaskCRUD(unittest.TestCase):
     def setUp(self):
+        os.environ["AI_DEVOPS_HOME"] = _TEST_HOME
         init_db()
         cleanup_db()
 
@@ -106,6 +112,7 @@ class TestTaskCRUD(unittest.TestCase):
 
 class TestTaskQueries(unittest.TestCase):
     def setUp(self):
+        os.environ["AI_DEVOPS_HOME"] = _TEST_HOME
         init_db()
         cleanup_db()
         tasks = [
@@ -140,6 +147,7 @@ class TestTaskQueries(unittest.TestCase):
 
 class TestTaskStatusTransitions(unittest.TestCase):
     def setUp(self):
+        os.environ["AI_DEVOPS_HOME"] = _TEST_HOME
         init_db()
         cleanup_db()
 

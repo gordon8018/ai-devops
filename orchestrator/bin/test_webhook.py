@@ -10,6 +10,8 @@ Usage:
     python test_webhook.py --port 8080 --event pull_request
 """
 
+__test__ = False
+
 import argparse
 import hashlib
 import hmac
@@ -112,7 +114,7 @@ def send_webhook(port: int, event_type: str, payload: dict, secret: str) -> dict
         }
 
 
-def test_health(port: int) -> bool:
+def check_health(port: int) -> bool:
     """Test health endpoint"""
     url = f"http://localhost:{port}/health"
     try:
@@ -141,7 +143,7 @@ def main():
     
     # Test health
     print("1. Testing health endpoint...")
-    if not test_health(args.port):
+    if not check_health(args.port):
         print("✗ Server is not healthy, aborting tests")
         return
     print()

@@ -25,7 +25,10 @@ from typing import Optional
 
 # Resolve paths
 SCRIPT_DIR = Path(__file__).parent.absolute()
-BASE = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
+
+
+def base_dir() -> Path:
+    return Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
 
 # Add orchestrator to path
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -157,7 +160,7 @@ def cmd_init(args):
     """Initialize the database"""
     init_db()
     print("✓ Database initialized")
-    print(f"  Location: {BASE / '.clawdbot' / 'agent_tasks.db'}")
+    print(f"  Location: {base_dir() / '.clawdbot' / 'agent_tasks.db'}")
 
 
 def cmd_spawn(args):
@@ -182,7 +185,7 @@ def cmd_spawn(args):
     insert_task(task)
     
     # Write to queue
-    queue_dir = BASE / "orchestrator" / "queue"
+    queue_dir = base_dir() / "orchestrator" / "queue"
     queue_dir.mkdir(parents=True, exist_ok=True)
     queue_path = queue_dir / f"{task_id}.json"
     queue_path.write_text(json.dumps(task, indent=2), encoding="utf-8")
@@ -202,7 +205,7 @@ def cmd_list(args):
         tasks = get_running_tasks()
     elif args.status == "queued":
         # Queued tasks are in queue/*.json
-        queue_dir = BASE / "orchestrator" / "queue"
+        queue_dir = base_dir() / "orchestrator" / "queue"
         tasks = []
         if queue_dir.exists():
             for p in queue_dir.glob("*.json"):
@@ -405,7 +408,7 @@ def cmd_retry(args):
     })
     
     # Re-queue
-    queue_dir = BASE / "orchestrator" / "queue"
+    queue_dir = base_dir() / "orchestrator" / "queue"
     queue_dir.mkdir(parents=True, exist_ok=True)
     
     task_data = {

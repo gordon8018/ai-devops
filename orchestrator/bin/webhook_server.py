@@ -22,16 +22,28 @@ import os
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-# Resolve paths
-BASE = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
-LOG_DIR = BASE / "logs"
+
+def base_dir() -> Path:
+    return Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
+
+
+def log_dir() -> Path:
+    return base_dir() / "logs"
+
+
+def monitor_script_path() -> Path:
+    return base_dir() / "orchestrator" / "bin" / "monitor.py"
+
+
+MONITOR_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="webhook-monitor")
 
 # Add orchestrator to path
-sys.path.insert(0, str(BASE / "orchestrator" / "bin"))
+sys.path.insert(0, str(base_dir() / "orchestrator" / "bin"))
 
 # Import database
 try:
@@ -46,8 +58,8 @@ WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "").encode()
 def verify_signature(payload: bytes, signature: str) -> bool:
     """Verify GitHub webhook signature"""
     if not WEBHOOK_SECRET:
-        print("[WARN] No webhook secret configured, skipping signature verification")
-        return True
+        print("[ERROR] No webhook secret configured; rejecting webhook request")
+        return False
     
     if not signature:
         return False
@@ -64,8 +76,9 @@ def verify_signature(payload: bytes, signature: str) -> bool:
 
 def log_event(event_type: str, action: str, data: Dict[str, Any]) -> None:
     """Log webhook event to file"""
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = LOG_DIR / "webhook.log"
+    logs = log_dir()
+    logs.mkdir(parents=True, exist_ok=True)
+    log_file = logs / "webhook.log"
     
     log_entry = {
         "timestamp": int(time.time() * 1000),
@@ -78,9 +91,9 @@ def log_event(event_type: str, action: str, data: Dict[str, Any]) -> None:
         f.write(json.dumps(log_entry) + "\n")
 
 
-def trigger_monitor() -> None:
-    """Trigger monitor to check task status"""
-    monitor_script = BASE / "orchestrator" / "bin" / "monitor.py"
+def _run_monitor_once() -> None:
+    """Run monitor.py --once synchronously."""
+    monitor_script = monitor_script_path()
     
     if not monitor_script.exists():
         print(f"[ERROR] Monitor script not found: {monitor_script}")
@@ -90,7 +103,7 @@ def trigger_monitor() -> None:
         # Run monitor in --once mode
         subprocess.run(
             ["python3", str(monitor_script), "--once"],
-            cwd=str(BASE),
+            cwd=str(base_dir()),
             capture_output=True,
             text=True,
             timeout=60,
@@ -100,6 +113,11 @@ def trigger_monitor() -> None:
         print("[WARN] Monitor timed out")
     except Exception as e:
         print(f"[ERROR] Failed to trigger monitor: {e}")
+
+
+def trigger_monitor() -> None:
+    """Queue monitor execution without blocking the webhook HTTP response."""
+    MONITOR_EXECUTOR.submit(_run_monitor_once)
 
 
 def handle_check_run(payload: Dict[str, Any]) -> None:
@@ -313,7 +331,7 @@ class GitHubWebhookHandler(BaseHTTPRequestHandler):
             response = {
                 "status": "healthy",
                 "timestamp": int(time.time() * 1000),
-                "base_dir": str(BASE),
+                "base_dir": str(base_dir()),
             }
             self.wfile.write(json.dumps(response).encode())
         else:
@@ -337,8 +355,8 @@ def run_server(port: int, daemon: bool = False) -> None:
     print(f"GitHub Webhook Server")
     print(f"{'='*60}")
     print(f"Listening on: http://0.0.0.0:{port}")
-    print(f"Base directory: {BASE}")
-    print(f"Log file: {LOG_DIR / 'webhook.log'}")
+    print(f"Base directory: {base_dir()}")
+    print(f"Log file: {log_dir() / 'webhook.log'}")
     print(f"Secret configured: {'Yes' if WEBHOOK_SECRET else 'No'}")
     print(f"{'='*60}")
     print()
@@ -400,7 +418,12 @@ GitHub Configuration:
         WEBHOOK_SECRET = args.secret.encode()
     
     # Ensure log directory exists
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    logs = log_dir()
+    logs.mkdir(parents=True, exist_ok=True)
+
+    if not WEBHOOK_SECRET:
+        print("[ERROR] Webhook secret is required. Set --secret or GITHUB_WEBHOOK_SECRET.")
+        sys.exit(2)
     
     # Run server
     run_server(args.port, daemon=args.daemon)

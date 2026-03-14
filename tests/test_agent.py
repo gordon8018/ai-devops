@@ -180,15 +180,13 @@ class TestAgentSpawnEdgeCases(unittest.TestCase):
         self.assertEqual(task["model"], "gpt-5.3-codex")
 
     def test_cmd_spawn_creates_queue_file(self):
-        # Note: BASE is resolved at module import time, so we check the global queue
         args = MagicMock(
             repo="test/repo", title="Test",
             agent="codex", model="gpt-5.3-codex", effort="medium",
             description="", files=None,
         )
         cmd_spawn(args)
-        # Check that a queue file was created (in global queue dir)
-        queue_dir = BASE / "orchestrator" / "queue"
+        queue_dir = self.base / "orchestrator" / "queue"
         queue_files = list(queue_dir.glob("*.json"))
         self.assertGreater(len(queue_files), 0)
 

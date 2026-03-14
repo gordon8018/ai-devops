@@ -211,7 +211,7 @@ cp discord/.env.example discord/.env
 | `.clawdbot/failure-logs/` | Per-repo JSON failure logs (cleaned after 30 days) |
 | `.clawdbot/prompt-templates/` | Winning prompt templates for success pattern memory |
 | `docs/` | Operational documentation |
-| `tests/` | Pytest test suite (137 tests) |
+| `tests/` | Pytest test suite |
 
 ## Important Files
 

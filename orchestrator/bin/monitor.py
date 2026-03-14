@@ -16,6 +16,7 @@ _sys.path.insert(0, str(BASE / "orchestrator" / "bin"))
 from db import init_db, get_running_tasks, update_task
 
 RUNNER_CODEX = str(BASE / "agents" / "run-codex-agent.sh")
+RUNNER_CLAUDE = str(BASE / "agents" / "run-claude-agent.sh")
 LOG_DIR = BASE / "logs"
 
 try:
@@ -331,9 +332,18 @@ def latest_run_failure(repo_dir: Path, branch: str) -> Optional[str]:
     return f"CI run failure ({url}) tail:\n{logs}"
 
 
-def restart_codex_agent(task: dict, worktree: Path, prompt_filename: str) -> None:
+def restart_agent(task: dict, worktree: Path, prompt_filename: str) -> None:
     session = task.get("tmuxSession") or task.get("tmux_session")
-    model = task.get("model", "gpt-5.3-codex")
+    agent = task.get("agent", "codex")
+    if agent == "claude":
+        runner = RUNNER_CLAUDE
+        default_model = "claude-sonnet-4"
+    else:
+        runner = RUNNER_CODEX
+        default_model = "gpt-5.3-codex"
+    if not Path(runner).exists():
+        raise RuntimeError(f"Runner not found for agent {agent}: {runner}")
+    model = task.get("model", default_model)
     effort = task.get("effort", "high")
     task_id = task["id"]
     execution_mode = task.get("executionMode") or task.get("execution_mode", "tmux")
@@ -342,7 +352,7 @@ def restart_codex_agent(task: dict, worktree: Path, prompt_filename: str) -> Non
         # Kill old session (ignore errors)
         if session:
             subprocess.run(["tmux", "kill-session", "-t", session], capture_output=True, text=True)
-        cmd = f'"{RUNNER_CODEX}" "{task_id}" "{model}" "{effort}" "{worktree}" "{prompt_filename}"'
+        cmd = f'"{runner}" "{task_id}" "{model}" "{effort}" "{worktree}" "{prompt_filename}"'
         sh(["tmux", "new-session", "-d", "-s", session, "-c", str(worktree), cmd], check=True)
         task["processId"] = None
         return
@@ -354,7 +364,7 @@ def restart_codex_agent(task: dict, worktree: Path, prompt_filename: str) -> Non
         except OSError:
             pass
     process = subprocess.Popen(
-        [RUNNER_CODEX, task_id, model, effort, str(worktree), prompt_filename],
+        [runner, task_id, model, effort, str(worktree), prompt_filename],
         cwd=str(worktree),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.STDOUT,
@@ -362,6 +372,11 @@ def restart_codex_agent(task: dict, worktree: Path, prompt_filename: str) -> Non
     )
     task["processId"] = process.pid
     task["tmuxSession"] = None
+
+
+def restart_codex_agent(task: dict, worktree: Path, prompt_filename: str) -> None:
+    """Backward-compatible alias for tests/callers using the old name."""
+    restart_agent(task, worktree, prompt_filename)
 
 
 def _process_task(t: dict, notified_ready: set) -> None:
@@ -519,7 +534,7 @@ def _process_task(t: dict, notified_ready: set) -> None:
 
         # Restart agent with retry prompt
         try:
-            restart_codex_agent(t, worktree, retry_prompt_path.name)
+            restart_agent(t, worktree, retry_prompt_path.name)
         except Exception as e:
             update_task(task_id, {"status": "blocked", "note": f"failed to restart agent: {e}"})
             t["status"] = "blocked"

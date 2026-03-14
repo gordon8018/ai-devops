@@ -1,12 +1,12 @@
 # AI DevOps - Test Coverage Report
 
-Generated: 2026-03-14 (Updated)
+Generated: 2026-03-14 (snapshot, may drift as tests evolve)
 
 ## Summary
 
 | Metric | Value |
 |--------|-------|
-| **Total Tests** | 104 |
+| **Total Tests** | Snapshot value |
 | **Passed** | 104 ✅ |
 | **Failed** | 0 |
 | **Overall Coverage** | 54% |

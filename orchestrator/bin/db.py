@@ -277,6 +277,8 @@ def update_task(task_id: str, updates: dict) -> None:
     values = []
     for key, value in updates.items():
         if key in allowed_fields:
+            if key == "metadata" and not isinstance(value, str):
+                value = json.dumps(value)
             fields.append(f"{key} = ?")
             values.append(value)
     

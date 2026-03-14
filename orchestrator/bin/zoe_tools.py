@@ -188,7 +188,7 @@ def plan_task(
     base_dir: Path | None = None,
 ) -> PlanTaskResult:
     planner = engine or ZoePlannerEngine()
-    request_payload = build_plan_request(task_input)
+    request_payload = build_plan_request(task_input, base_dir=base_dir)
     plan = planner.plan(request_payload)
     plan_path = save_plan(plan, base_dir=base_dir)
     return PlanTaskResult(plan=plan, plan_path=plan_path)

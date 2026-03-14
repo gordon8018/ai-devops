@@ -73,11 +73,11 @@ class TestSignatureVerification(unittest.TestCase):
         self.assertFalse(result)
 
     def test_no_secret_configured(self):
-        """Test skips verification when no secret configured"""
+        """Test fails verification when no secret configured"""
         with patch("webhook_server.WEBHOOK_SECRET", b""):
             result = verify_signature(self.payload, "")
-        
-        self.assertTrue(result)
+
+        self.assertFalse(result)
 
     def test_wrong_prefix(self):
         """Test signature with wrong prefix fails"""
