@@ -24,6 +24,99 @@ except ImportError:
     def notify(msg: str) -> None:
         print(f"[NOTIFY] {msg}")
 
+try:
+    from obsidian_client import ObsidianClient
+except ImportError:
+    ObsidianClient = None  # type: ignore
+
+
+def _obsidian_search(query: str) -> list[dict]:
+    """Search Obsidian for context. Returns [] if unconfigured or unreachable."""
+    token = os.getenv("OBSIDIAN_API_TOKEN", "")
+    if not token or ObsidianClient is None:
+        return []
+    client = ObsidianClient.from_env()
+    return client.search(query, limit=2)
+
+
+def _write_failure_log(repo: str, task_id: str, fail_summary: str, ci_detail: str) -> None:
+    """Write a structured failure record to .clawdbot/failure-logs/<repo>/."""
+    log_dir = BASE / ".clawdbot" / "failure-logs" / repo.replace("/", "_")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = int(time.time() * 1000)
+    log_file = log_dir / f"{task_id}-{timestamp}.json"
+    log_file.write_text(
+        json.dumps({
+            "taskId": task_id,
+            "repo": repo,
+            "failSummary": fail_summary,
+            "ciDetail": ci_detail[:2000] if ci_detail else "",
+            "timestamp": timestamp,
+        }, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _load_failure_logs(repo: str, limit: int = 2) -> str:
+    """Load recent failure log excerpts for a repo."""
+    log_dir = BASE / ".clawdbot" / "failure-logs" / repo.replace("/", "_")
+    if not log_dir.exists():
+        return ""
+    logs = sorted(log_dir.glob("*.json"), reverse=True)[:limit]
+    excerpts = []
+    for log in logs:
+        try:
+            data = json.loads(log.read_text(encoding="utf-8"))
+            excerpts.append(f"- [{data.get('taskId','')}] {data.get('failSummary','')} — {data.get('ciDetail','')[:200]}")
+        except Exception:
+            continue
+    return "\n".join(excerpts)
+
+
+def _build_retry_prompt(task: dict, retry_n: int, fail_summary: str, ci_detail: str) -> Path:
+    """
+    Build and write prompt.retryN.txt for a task.
+    Injects Obsidian business context and past failure history.
+    Returns path to the written file.
+    """
+    worktree = Path(task.get("worktree", ""))
+    base_prompt_path = worktree / "prompt.txt"
+    base_prompt = base_prompt_path.read_text(encoding="utf-8") if base_prompt_path.exists() else ""
+
+    # Obsidian context
+    query = f"{task.get('title', '')} {task.get('repo', '')}"
+    obsidian_results = _obsidian_search(query)
+    obsidian_section = ""
+    if obsidian_results:
+        excerpts = "\n".join(f"- [{r['path']}]: {r['excerpt']}" for r in obsidian_results)
+        obsidian_section = f"\nBUSINESS CONTEXT (from Obsidian):\n{excerpts}\n"
+
+    # Past failure history
+    past_failures = _load_failure_logs(task.get("repo", ""))
+    failures_section = ""
+    if past_failures:
+        failures_section = f"\nPAST FAILURES FOR THIS REPO:\n{past_failures}\n"
+
+    retry_prompt = (
+        base_prompt
+        + obsidian_section
+        + failures_section
+        + "\n\n"
+        + f"RERUN DIRECTIVE (Retry #{retry_n}):\n"
+        + "CI is failing. Your ONLY priority is to make CI green.\n"
+        + f"Failed checks summary: {fail_summary}\n\n"
+        + (ci_detail + "\n\n" if ci_detail else "")
+        + "Instructions:\n"
+        + "- Read failing logs and identify root cause.\n"
+        + "- Apply minimal fix.\n"
+        + "- Run local equivalent checks/tests if available.\n"
+        + "- Push commits to the SAME branch and update the PR.\n"
+    )
+
+    retry_prompt_path = worktree / f"prompt.retry{retry_n}.txt"
+    retry_prompt_path.write_text(retry_prompt, encoding="utf-8")
+    return retry_prompt_path
+
 
 def sh(cmd: list[str], cwd: Optional[Path] = None, check: bool = False) -> str:
     r = subprocess.run(
@@ -372,26 +465,11 @@ def _process_task(t: dict, notified_ready: set) -> None:
         # Pull more CI details if possible
         ci_detail = latest_run_failure(worktree, branch) or ""
 
-        # Base prompt
-        base_prompt_path = worktree / "prompt.txt"
-        base_prompt = base_prompt_path.read_text(encoding="utf-8") if base_prompt_path.exists() else ""
+        # Write failure log
+        _write_failure_log(t.get("repo", ""), task_id, fail_summary, ci_detail)
 
-        retry_prompt_path = worktree / f"prompt.retry{retry_n}.txt"
-
-        retry_prompt = (
-            base_prompt
-            + "\n\n"
-            + f"RERUN DIRECTIVE (Retry #{retry_n}):\n"
-            + "CI is failing. Your ONLY priority is to make CI green.\n"
-            + f"Failed checks summary: {fail_summary}\n\n"
-            + (ci_detail + "\n\n" if ci_detail else "")
-            + "Instructions:\n"
-            + "- Read failing logs and identify root cause.\n"
-            + "- Apply minimal fix.\n"
-            + "- Run local equivalent checks/tests if available.\n"
-            + "- Push commits to the SAME branch and update the PR.\n"
-        )
-        retry_prompt_path.write_text(retry_prompt, encoding="utf-8")
+        # Build retry prompt with Obsidian context
+        retry_prompt_path = _build_retry_prompt(t, retry_n, fail_summary, ci_detail)
 
         # Restart agent with retry prompt
         try:

@@ -231,5 +231,74 @@ def test_monitor_run_once_reads_sqlite(tmp_path, monkeypatch):
     assert len(called) == 1, "get_running_tasks must be called by run_once"
 
 
+def test_retry_prompt_includes_business_context(tmp_path, monkeypatch):
+    """When Obsidian returns results, retry prompt must contain BUSINESS CONTEXT."""
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
+    import importlib, orchestrator.bin.monitor as mon
+    importlib.reload(mon)
+
+    wt = tmp_path / "worktrees" / "feat-t1"
+    wt.mkdir(parents=True)
+    (wt / "prompt.txt").write_text("base prompt")
+
+    task = {
+        "id": "t1", "repo": "my-repo", "title": "Fix auth",
+        "branch": "feat/t1", "worktree": str(wt),
+        "tmuxSession": "agent-t1", "executionMode": "tmux",
+        "model": "gpt-5.3-codex", "effort": "high",
+        "attempts": 0, "maxAttempts": 3,
+    }
+
+    obsidian_results = [{"path": "meeting.md", "excerpt": "discussed auth issue"}]
+    monkeypatch.setattr(mon, "_obsidian_search", lambda query: obsidian_results)
+    monkeypatch.setattr(mon, "restart_codex_agent", lambda *a, **kw: None)
+    monkeypatch.setattr(mon, "latest_run_failure", lambda *a: None)
+
+    prompt_path = mon._build_retry_prompt(task, 1, "tests:FAILURE", "")
+    content = (wt / "prompt.retry1.txt").read_text()
+    assert "BUSINESS CONTEXT" in content
+    assert "discussed auth issue" in content
+
+
+def test_retry_prompt_skips_context_when_obsidian_empty(tmp_path, monkeypatch):
+    """When Obsidian returns [], retry prompt must not include BUSINESS CONTEXT."""
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
+    import importlib, orchestrator.bin.monitor as mon
+    importlib.reload(mon)
+
+    wt = tmp_path / "worktrees" / "feat-t2"
+    wt.mkdir(parents=True)
+    (wt / "prompt.txt").write_text("base prompt")
+
+    task = {
+        "id": "t2", "repo": "r", "title": "T",
+        "branch": "feat/t2", "worktree": str(wt),
+        "tmuxSession": None, "executionMode": "process",
+        "model": "gpt-5.3-codex", "effort": "high",
+        "attempts": 0, "maxAttempts": 3,
+    }
+
+    monkeypatch.setattr(mon, "_obsidian_search", lambda query: [])
+    prompt_path = mon._build_retry_prompt(task, 1, "lint:FAILURE", "")
+    content = (wt / "prompt.retry1.txt").read_text()
+    assert "BUSINESS CONTEXT" not in content
+
+
+def test_failure_log_written_on_ci_failure(tmp_path, monkeypatch):
+    """On CI failure detection, a structured failure log must be written."""
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
+    import importlib, orchestrator.bin.monitor as mon
+    importlib.reload(mon)
+
+    mon._write_failure_log("my-repo", "task-1", "lint:FAILURE", "details here")
+
+    import json
+    logs = list((tmp_path / ".clawdbot" / "failure-logs" / "my-repo").glob("*.json"))
+    assert len(logs) == 1
+    data = json.loads(logs[0].read_text())
+    assert data["taskId"] == "task-1"
+    assert data["failSummary"] == "lint:FAILURE"
+
+
 if __name__ == "__main__":
     unittest.main()
