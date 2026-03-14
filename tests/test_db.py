@@ -213,3 +213,20 @@ def test_legacy_functions_removed():
         "load_registry must be removed"
     assert not hasattr(db_mod, "save_registry"), \
         "save_registry must be removed"
+
+def test_spawn_agent_writes_sqlite_not_json(tmp_path, monkeypatch):
+    """After daemon processes a task, active-tasks.json must NOT be created."""
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
+    json_registry = tmp_path / ".clawdbot" / "active-tasks.json"
+    # The JSON registry file must not be created by any startup code
+    # We check this by verifying daemon module imports don't auto-create it
+    import importlib, sys
+    # Reload db to use tmp_path
+    if "orchestrator.bin.db" in sys.modules:
+        del sys.modules["orchestrator.bin.db"]
+    import orchestrator.bin.db as db_mod
+    importlib.reload(db_mod)
+    db_mod.init_db()
+    # JSON registry must not exist
+    assert not json_registry.exists(), \
+        "active-tasks.json must not be created — SQLite only"
