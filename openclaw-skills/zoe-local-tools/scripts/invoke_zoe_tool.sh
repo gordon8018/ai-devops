@@ -54,6 +54,7 @@ case "${COMMAND}" in
     fi
     ;;
   call)
+    _require_api_bin
     TOOL_NAME="${2:-}"
     if [[ -z "${TOOL_NAME}" ]]; then
       echo "usage: invoke_zoe_tool.sh call <tool-name> '<json-args>'" >&2
