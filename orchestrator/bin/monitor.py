@@ -53,6 +53,11 @@ except ImportError:
     )
 
 try:
+    from .task_spec import constraint_path_list as _constraint_path_list
+except ImportError:
+    from task_spec import constraint_path_list as _constraint_path_list
+
+try:
     from notify import notify
 except ImportError:
     def notify(msg: str) -> None:
@@ -77,28 +82,6 @@ def _obsidian_search(query: str) -> list[dict]:
         return []
     client = ObsidianClient.from_env()
     return client.search(query, limit=2)
-
-
-def _constraint_path_list(raw: dict | None, *keys: str) -> list[str]:
-    if not isinstance(raw, dict):
-        return []
-    values: list[str] = []
-    for key in keys:
-        items = raw.get(key)
-        if not isinstance(items, list):
-            continue
-        for item in items:
-            text = str(item).strip()
-            if text:
-                values.append(text)
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for item in values:
-        if item in seen:
-            continue
-        seen.add(item)
-        deduped.append(item)
-    return deduped
 
 
 def _git_touched_files(worktree: Path) -> list[str]:

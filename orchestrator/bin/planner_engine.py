@@ -10,9 +10,11 @@ from typing import Any, Mapping
 try:
     from .errors import InvalidPlan
     from .plan_schema import Plan
+    from .task_spec import constraint_path_list as _constraint_path_list
 except ImportError:
     from errors import InvalidPlan
     from plan_schema import Plan
+    from task_spec import constraint_path_list as _constraint_path_list
 
 CODE_CHANGE_TERMS = (
     "implement",
@@ -271,19 +273,6 @@ def _ranked_file_subset(
 def _repo_root(repo: str) -> Path:
     base_dir = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
     return base_dir / "repos" / repo
-
-
-def _constraint_path_list(constraints: Mapping[str, Any], *keys: str) -> list[str]:
-    values: list[str] = []
-    for key in keys:
-        raw = constraints.get(key)
-        if not isinstance(raw, list):
-            continue
-        for item in raw:
-            text = str(item).strip()
-            if text:
-                values.append(text)
-    return _dedupe(values)
 
 
 def _repo_relative_constraint_path(path: str, repo_root: Path) -> str | None:

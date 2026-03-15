@@ -21,9 +21,11 @@ except ImportError:
 try:
     from .errors import DispatchError
     from .plan_schema import Plan, Subtask, load_plan, sanitize_identifier
+    from .task_spec import constraint_path_list as _constraint_path_list
 except ImportError:
     from errors import DispatchError
     from plan_schema import Plan, Subtask, load_plan, sanitize_identifier
+    from task_spec import constraint_path_list as _constraint_path_list
 
 
 def default_base_dir() -> Path:
@@ -100,26 +102,6 @@ def _canonical_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _constraint_path_list(raw: dict[str, Any] | None, *keys: str) -> list[str]:
-    if not isinstance(raw, dict):
-        return []
-    values: list[str] = []
-    for key in keys:
-        items = raw.get(key)
-        if not isinstance(items, list):
-            continue
-        for item in items:
-            text = str(item).strip()
-            if text:
-                values.append(text)
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for item in values:
-        if item in seen:
-            continue
-        seen.add(item)
-        deduped.append(item)
-    return deduped
 
 
 def _normalize_constraint_path(value: str, repo_root: Path) -> str:

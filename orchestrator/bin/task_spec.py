@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import json
 import textwrap
 from pathlib import Path
@@ -8,6 +9,28 @@ from typing import Any
 
 class TaskSpecError(ValueError):
     """Raised when TASK_SPEC is missing, malformed, or invalid."""
+
+
+def constraint_path_list(raw: dict | None, *keys: str) -> list[str]:
+    """Extract and deduplicate path strings from a constraints dict under the given keys."""
+    if not isinstance(raw, dict):
+        return []
+    values: list[str] = []
+    for key in keys:
+        items = raw.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            text = str(item).strip()
+            if text:
+                values.append(text)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for item in values:
+        if item not in seen:
+            seen.add(item)
+            deduped.append(item)
+    return deduped
 
 
 _REQUIRED_FIELDS = (
@@ -132,13 +155,19 @@ def load_task_spec_file(path: str | Path) -> dict[str, Any]:
 
 
 def validate_task_spec(payload: dict[str, Any]) -> dict[str, Any]:
-    missing = [field for field in _REQUIRED_FIELDS if field not in payload or payload[field] in (None, "", [])]
+    # forbiddenPaths may be empty (no forbidden paths is valid)
+    missing = [
+        field for field in _REQUIRED_FIELDS
+        if field not in payload or (payload[field] in (None, "", []) and field != "forbiddenPaths")
+    ]
     if missing:
         raise TaskSpecError(f"TASK_SPEC missing required fields: {', '.join(missing)}")
 
-    for key in ("allowedPaths", "forbiddenPaths", "mustTouch", "definitionOfDone", "validation", "failureRules"):
+    for key in ("allowedPaths", "mustTouch", "definitionOfDone", "validation", "failureRules"):
         if not isinstance(payload.get(key), list) or not payload[key]:
             raise TaskSpecError(f"TASK_SPEC field '{key}' must be a non-empty list")
+    if not isinstance(payload.get("forbiddenPaths"), list):
+        raise TaskSpecError("TASK_SPEC field 'forbiddenPaths' must be a list")
 
     if not isinstance(payload.get("firstStepRequirement"), str) or not payload["firstStepRequirement"].strip():
         raise TaskSpecError("TASK_SPEC field 'firstStepRequirement' must be a non-empty string")
@@ -149,7 +178,10 @@ def validate_task_spec(payload: dict[str, Any]) -> dict[str, Any]:
     if not allowed or not must_touch:
         raise TaskSpecError("TASK_SPEC must include non-empty allowedPaths and mustTouch")
 
-    if not any(any(target.startswith(root.rstrip("*")) or root.rstrip("*").rstrip("/") in target for root in allowed) for target in must_touch):
+    def _in_allowed(target: str) -> bool:
+        return any(fnmatch.fnmatch(target, rule) or fnmatch.fnmatch(target, rule.rstrip("/") + "/*") for rule in allowed)
+
+    if not all(_in_allowed(t) for t in must_touch):
         raise TaskSpecError("TASK_SPEC mustTouch must stay inside allowedPaths")
 
     normalized = dict(payload)

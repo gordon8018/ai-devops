@@ -20,6 +20,11 @@ try:
 except ImportError:
     from config import ai_devops_home, queue_dir, repos_dir, worktrees_dir
 
+try:
+    from .task_spec import constraint_path_list as _constraint_path_list
+except ImportError:
+    from task_spec import constraint_path_list as _constraint_path_list
+
 # 导入 SQLite 跟踪模块
 try:
     from .db import init_db, get_task, insert_task
@@ -125,26 +130,6 @@ def runner_for_agent(agent: str) -> Path:
     raise RuntimeError(f"Unsupported agent: {agent}")
 
 
-def _constraint_path_list(raw: dict | None, *keys: str) -> list[str]:
-    if not isinstance(raw, dict):
-        return []
-    values: list[str] = []
-    for key in keys:
-        items = raw.get(key)
-        if not isinstance(items, list):
-            continue
-        for item in items:
-            text = str(item).strip()
-            if text:
-                values.append(text)
-    seen: set[str] = set()
-    result: list[str] = []
-    for item in values:
-        if item in seen:
-            continue
-        seen.add(item)
-        result.append(item)
-    return result
 
 
 def _repo_relative_constraint_path(path: str, repo_root: Path) -> str | None:
