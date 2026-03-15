@@ -5,6 +5,7 @@ Zoe Daemon - Queue consumer and agent spawner
 Consumes tasks from queue/, creates worktrees, and spawns coding agents.
 """
 
+import fnmatch
 import json
 import os
 import shlex
@@ -124,6 +125,97 @@ def runner_for_agent(agent: str) -> Path:
     raise RuntimeError(f"Unsupported agent: {agent}")
 
 
+def _constraint_path_list(raw: dict | None, *keys: str) -> list[str]:
+    if not isinstance(raw, dict):
+        return []
+    values: list[str] = []
+    for key in keys:
+        items = raw.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            text = str(item).strip()
+            if text:
+                values.append(text)
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in values:
+        if item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
+def _repo_relative_constraint_path(path: str, repo_root: Path) -> str | None:
+    text = str(path).strip()
+    if not text:
+        return None
+    candidate = Path(text)
+    try:
+        repo_resolved = repo_root.resolve()
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+            try:
+                rel = resolved.relative_to(repo_resolved)
+                text = str(rel)
+            except ValueError:
+                return None
+        return text.replace('\\', '/').lstrip('./') or None
+    except OSError:
+        return None
+
+
+def _scope_patterns_from_task_spec(task_spec: dict, repo_root: Path) -> list[str]:
+    patterns: list[str] = []
+    for item in _constraint_path_list(task_spec, 'allowedPaths', 'mustTouch', 'requiredTouchedPaths'):
+        rel = _repo_relative_constraint_path(item, repo_root)
+        if not rel:
+            continue
+        patterns.append(rel)
+        if rel.endswith('/**'):
+            patterns.append(rel[:-3])
+        if '*' not in rel and '?' not in rel and '[' not in rel:
+            p = Path(rel)
+            if p.suffix:
+                patterns.append(str(p.parent).replace('\\', '/'))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in patterns:
+        normalized = item.rstrip('/') or item
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
+
+
+def _write_scope_manifest(wt_dir: Path, repo_root: Path, task_spec: dict) -> Path:
+    contract_dir = wt_dir / '.task-contract'
+    contract_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        'repoRoot': str(repo_root),
+        'worktree': str(wt_dir),
+        'allowedPaths': _constraint_path_list(task_spec, 'allowedPaths'),
+        'forbiddenPaths': _constraint_path_list(task_spec, 'forbiddenPaths', 'blockedPaths'),
+        'mustTouch': _constraint_path_list(task_spec, 'mustTouch', 'requiredTouchedPaths'),
+        'sparsePatterns': _scope_patterns_from_task_spec(task_spec, repo_root),
+    }
+    target = contract_dir / 'scope-manifest.json'
+    target.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+    return target
+
+
+def _apply_sparse_checkout_if_scoped(repo_root: Path, wt_dir: Path, task_spec: dict) -> bool:
+    patterns = _scope_patterns_from_task_spec(task_spec, repo_root)
+    if not patterns:
+        return False
+    sh(['git', 'sparse-checkout', 'init', '--no-cone'], cwd=wt_dir)
+    cmd = ['git', 'sparse-checkout', 'set', '--no-cone', *patterns]
+    sh(cmd, cwd=wt_dir)
+    return True
+
+
 def resolve_branch(task: dict) -> str:
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     worktree_strategy = metadata.get("worktreeStrategy")
@@ -137,16 +229,34 @@ def launch_agent_process(
     task: dict,
     wt_dir: Path,
     prompt_txt: Path,
+    task_spec_file: Path | None = None,
 ) -> tuple[str, str | None, int | None]:
     model = task.get("model", "gpt-5.3-codex")
     effort = task.get("effort", "high")
     session = f"agent-{task['id']}"
 
+    child_env = os.environ.copy()
+    if task_spec_file is not None:
+        child_env["TASK_SPEC_FILE"] = str(task_spec_file)
+        child_env["TASK_SPEC_REQUIRED"] = "1"
+    scope_manifest_file = wt_dir / ".task-contract" / "scope-manifest.json"
+    if scope_manifest_file.exists():
+        child_env["SCOPE_MANIFEST_FILE"] = str(scope_manifest_file)
+
     if tmux_available():
         if tmux_has(session):
             raise RuntimeError(f"tmux session already exists: {session}")
+        env_prefix = ""
+        if task_spec_file is not None:
+            env_prefix = (
+                f"TASK_SPEC_FILE={shlex.quote(str(task_spec_file))} "
+                f"TASK_SPEC_REQUIRED=1 "
+            )
+        scope_manifest_file = wt_dir / ".task-contract" / "scope-manifest.json"
+        if scope_manifest_file.exists():
+            env_prefix += f"SCOPE_MANIFEST_FILE={shlex.quote(str(scope_manifest_file))} "
         cmd = (
-            f"{shlex.quote(str(runner))} {shlex.quote(task['id'])} {shlex.quote(model)}"
+            f"{env_prefix}{shlex.quote(str(runner))} {shlex.quote(task['id'])} {shlex.quote(model)}"
             f" {shlex.quote(effort)} {shlex.quote(str(wt_dir))} {shlex.quote(prompt_txt.name)}"
         )
         sh(["tmux", "new-session", "-d", "-s", session, "-c", str(wt_dir), cmd])
@@ -158,6 +268,7 @@ def launch_agent_process(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.STDOUT,
         start_new_session=True,
+        env=child_env,
     )
     return ("process", None, process.pid)
 
@@ -176,6 +287,20 @@ def spawn_agent(task: dict) -> dict:
     prompt = task.get("prompt") or compile_prompt(task, wt_dir)
     prompt_txt.write_text(prompt, encoding="utf-8")
 
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    task_spec_payload = metadata.get("taskSpec") if isinstance(metadata.get("taskSpec"), dict) else None
+    task_spec_file: Path | None = None
+    scope_manifest_file: Path | None = None
+    sparse_checkout_applied = False
+    if task_spec_payload is not None:
+        task_spec_file = wt_dir / "task-spec.json"
+        task_spec_file.write_text(json.dumps(task_spec_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        scope_manifest_file = _write_scope_manifest(wt_dir, repo_root, task_spec_payload)
+        try:
+            sparse_checkout_applied = _apply_sparse_checkout_if_scoped(repo_root, wt_dir, task_spec_payload)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to apply scoped sparse-checkout for {task['id']}: {exc}") from exc
+
     model = task.get("model", "gpt-5.3-codex")
     effort = task.get("effort", "high")
 
@@ -183,7 +308,7 @@ def spawn_agent(task: dict) -> dict:
     if not runner.exists():
         raise RuntimeError(f"Runner not found for agent {agent}: {runner}")
 
-    execution_mode, session, process_id = launch_agent_process(runner, task, wt_dir, prompt_txt)
+    execution_mode, session, process_id = launch_agent_process(runner, task, wt_dir, prompt_txt, task_spec_file)
 
     item = {
         "id": task["id"],
@@ -210,6 +335,9 @@ def spawn_agent(task: dict) -> dict:
         "attempts": 0,
         "maxAttempts": int(task.get("maxAttempts", 3)),
         "promptFile": str(prompt_txt),
+        "taskSpecFile": str(task_spec_file) if task_spec_file else None,
+        "scopeManifestFile": str(scope_manifest_file) if scope_manifest_file else None,
+        "sparseCheckoutApplied": sparse_checkout_applied,
         "lastFailure": None,
         "pr": None,
         "prUrl": None,

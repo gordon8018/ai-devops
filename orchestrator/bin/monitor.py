@@ -107,6 +107,14 @@ def _git_touched_files(worktree: Path) -> list[str]:
     output = sh(["git", "status", "--short"], cwd=worktree)
     if not output:
         return []
+    ignored_runtime_paths = {
+        'prompt.txt',
+        'task-spec.json',
+    }
+    ignored_prefixes = (
+        '.task-contract/',
+        'task-contract/',
+    )
     touched: list[str] = []
     for line in output.splitlines():
         if not line.strip():
@@ -114,8 +122,14 @@ def _git_touched_files(worktree: Path) -> list[str]:
         path = line[3:].strip() if len(line) >= 4 else line.strip()
         if " -> " in path:
             path = path.split(" -> ", 1)[1].strip()
-        if path:
-            touched.append(path)
+        if not path:
+            continue
+        normalized = path.replace('\\', '/').lstrip('./')
+        if normalized in ignored_runtime_paths:
+            continue
+        if any(normalized.startswith(prefix) for prefix in ignored_prefixes):
+            continue
+        touched.append(normalized)
     return touched
 
 
@@ -145,7 +159,7 @@ def _path_matches_constraint(path: str, rule: str, worktree: Path) -> bool:
     )
 
 
-def _scope_violation(task: dict, worktree: Path, *, enforce_must_touch: bool = False) -> tuple[str, list[str]] | None:
+def _scope_violation(task: dict, worktree: Path, *, enforce_must_touch: bool = False) -> tuple[str, str, list[str]] | None:
     metadata = task.get("metadata")
     if isinstance(metadata, str):
         try:
@@ -166,20 +180,20 @@ def _scope_violation(task: dict, worktree: Path, *, enforce_must_touch: bool = F
     touched = _git_touched_files(worktree)
     if not touched:
         if enforce_must_touch and (allowed or must_touch):
-            return ("no scoped repository edits detected before completion", touched)
+            return ("execution_contract_breach", "no scoped repository edits detected before completion", touched)
         return None
 
     forbidden_hits = [path for path in touched if any(_path_matches_constraint(path, rule, worktree) for rule in forbidden)]
     if forbidden_hits:
-        return (f"forbidden paths touched: {', '.join(forbidden_hits[:5])}", touched)
+        return ("execution_contract_breach", f"forbidden paths touched: {', '.join(forbidden_hits[:5])}", touched)
 
     if allowed:
         outside = [path for path in touched if not any(_path_matches_constraint(path, rule, worktree) for rule in allowed)]
         if outside:
-            return (f"touched files outside allowed paths: {', '.join(outside[:5])}", touched)
+            return ("execution_contract_breach", f"touched files outside allowed paths: {', '.join(outside[:5])}", touched)
 
     if enforce_must_touch and must_touch and not any(any(_path_matches_constraint(path, rule, worktree) for rule in must_touch) for path in touched):
-        return (f"required target paths not touched yet: expected one of {', '.join(must_touch[:5])}", touched)
+        return ("required_target_not_touched", f"required target paths not touched yet: expected one of {', '.join(must_touch[:5])}", touched)
 
     if enforce_must_touch and task_spec:
         files_hint = _constraint_path_list(task_spec, "filesHint")
@@ -187,7 +201,7 @@ def _scope_violation(task: dict, worktree: Path, *, enforce_must_touch: bool = F
             any(_path_matches_constraint(path, rule, worktree) for rule in files_hint)
             for path in touched
         ):
-            return (f"touched files do not overlap taskSpec filesHint: expected one of {', '.join(files_hint[:5])}", touched)
+            return ("execution_contract_breach", f"touched files do not overlap taskSpec filesHint: expected one of {', '.join(files_hint[:5])}", touched)
 
     return None
 
@@ -325,11 +339,11 @@ def _process_task(t: dict, notified_ready: set) -> None:
 
     scope_violation = _scope_violation(t, worktree, enforce_must_touch=False)
     if scope_violation:
-        note, touched = scope_violation
-        update_task(task_id, {"status": "blocked", "note": note})
+        breach_code, note, touched = scope_violation
+        update_task(task_id, {"status": "blocked", "note": f"{breach_code}: {note}"})
         t["status"] = "blocked"
         notify(
-            f"🛑 Scope violation: `{task_id}` touched wrong files. {note}\n"
+            f"🛑 Scope violation: `{task_id}` touched wrong files. {breach_code}: {note}\n"
             f"Touched: {', '.join(touched[:8])}"
         )
         return
@@ -353,56 +367,59 @@ def _process_task(t: dict, notified_ready: set) -> None:
             review_pr(task_id, pr["number"], worktree_path)
 
     if not pr:
+        exit_info = load_exit_status(task_id)
+        if t.get("status") == "running" and exit_info:
+            exit_code = exit_info.get("exitCode")
+            completed_at = exit_info.get("finishedAt")
+            if not isinstance(completed_at, int):
+                completed_at = int(time.time() * 1000)
+            terminal_scope_violation = _scope_violation(t, worktree, enforce_must_touch=True)
+            if terminal_scope_violation:
+                breach_code, note, touched = terminal_scope_violation
+                update_task(task_id, {
+                    "status": "blocked",
+                    "completed_at": completed_at,
+                    "note": f"{breach_code}: {note}",
+                })
+                t["status"] = "blocked"
+                notify(
+                    f"🛑 Scope violation after agent exit: `{task_id}`. {breach_code}: {note}\n"
+                    f"Touched: {', '.join(touched[:8])}"
+                )
+            elif exit_code == 0:
+                update_task(task_id, {
+                    "status": "agent_exited",
+                    "completed_at": completed_at,
+                    "note": "agent process exited cleanly before opening a PR",
+                })
+                t["status"] = "agent_exited"
+            else:
+                update_task(task_id, {
+                    "status": "agent_failed",
+                    "completed_at": completed_at,
+                    "note": f"agent exited with code {exit_code}",
+                })
+                t["status"] = "agent_failed"
+                notify(
+                    f"⚠️ Agent exited: `{task_id}` with code {exit_code}. Check logs."
+                )
+            return
+
         # 在 PR 生成前才依赖运行时存活判断。
         if not alive and t.get("status") == "running":
-            exit_info = load_exit_status(task_id)
-            if exit_info:
-                exit_code = exit_info.get("exitCode")
-                completed_at = exit_info.get("finishedAt")
-                terminal_scope_violation = _scope_violation(t, worktree, enforce_must_touch=True)
-                if terminal_scope_violation:
-                    note, touched = terminal_scope_violation
-                    update_task(task_id, {
-                        "status": "blocked",
-                        "completed_at": completed_at,
-                        "note": note,
-                    })
-                    t["status"] = "blocked"
-                    notify(
-                        f"🛑 Scope violation after agent exit: `{task_id}`. {note}\n"
-                        f"Touched: {', '.join(touched[:8])}"
-                    )
-                elif exit_code == 0:
-                    update_task(task_id, {
-                        "status": "agent_exited",
-                        "completed_at": completed_at,
-                        "note": "agent process exited cleanly before opening a PR",
-                    })
-                    t["status"] = "agent_exited"
-                else:
-                    update_task(task_id, {
-                        "status": "agent_failed",
-                        "completed_at": completed_at,
-                        "note": f"agent exited with code {exit_code}",
-                    })
-                    t["status"] = "agent_failed"
-                    notify(
-                        f"⚠️ Agent exited: `{task_id}` with code {exit_code}. Check logs."
-                    )
-            else:
-                note = (
-                    "background process not found"
-                    if execution_mode == "process"
-                    else "tmux session not found"
-                )
-                update_task(task_id, {"status": "agent_dead", "note": note})
-                t["status"] = "agent_dead"
-                runtime_ref = (
-                    f"pid={process_id}" if execution_mode == "process" else session
-                )
-                notify(
-                    f"⚠️ Agent session dead: `{task_id}` ({runtime_ref}). Check logs."
-                )
+            note = (
+                "background process not found"
+                if execution_mode == "process"
+                else "tmux session not found"
+            )
+            update_task(task_id, {"status": "agent_dead", "note": note})
+            t["status"] = "agent_dead"
+            runtime_ref = (
+                f"pid={process_id}" if execution_mode == "process" else session
+            )
+            notify(
+                f"⚠️ Agent session dead: `{task_id}` ({runtime_ref}). Check logs."
+            )
         return
 
     # 3) Only handle OPEN PRs for checks/retry
@@ -419,15 +436,15 @@ def _process_task(t: dict, notified_ready: set) -> None:
     if passed and merge_clean(pr):
         terminal_scope_violation = _scope_violation(t, worktree, enforce_must_touch=True)
         if terminal_scope_violation:
-            note, touched = terminal_scope_violation
+            breach_code, note, touched = terminal_scope_violation
             update_task(task_id, {
                 "status": "blocked",
                 "completed_at": int(time.time() * 1000),
-                "note": note,
+                "note": f"{breach_code}: {note}",
             })
             t["status"] = "blocked"
             notify(
-                f"🛑 Scope violation before ready: `{task_id}`. {note}\n"
+                f"🛑 Scope violation before ready: `{task_id}`. {breach_code}: {note}\n"
                 f"Touched: {', '.join(touched[:8])}"
             )
             return

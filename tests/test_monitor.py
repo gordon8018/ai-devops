@@ -18,7 +18,7 @@ SCRIPT_DIR = Path(__file__).parent.absolute()
 BASE = SCRIPT_DIR.parent
 sys.path.insert(0, str(BASE / "orchestrator" / "bin"))
 
-from monitor import notify, check_all_tasks
+from monitor import notify, check_all_tasks, _git_touched_files
 from monitor_helpers import (
     sh, tmux_available, tmux_alive, process_alive,
     exit_status_path, load_exit_status, log_file_stale, task_elapsed_minutes,
@@ -174,6 +174,14 @@ class TestPRAnalysis(unittest.TestCase):
         passed, summary, pending = analyze_checks(pr)
         self.assertFalse(passed)
         self.assertFalse(pending)
+
+
+class TestTouchedFileFiltering(unittest.TestCase):
+    @patch("monitor.sh", return_value="?? .task-contract/scope-manifest.json\n?? prompt.txt\n?? task-spec.json\n M skills/sonos-pure-play/scripts/web-flow.mjs")
+    def test_git_touched_files_ignores_runtime_contract_artifacts(self, mock_sh):
+        with tempfile.TemporaryDirectory() as td:
+            touched = _git_touched_files(Path(td))
+        self.assertEqual(touched, ["skills/sonos-pure-play/scripts/web-flow.mjs"])
 
 
 class TestMonitorTaskChecking(unittest.TestCase):

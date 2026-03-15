@@ -189,6 +189,90 @@ class TestTmuxShellQuoting(unittest.TestCase):
         self.assertIn(expected_quoted, shell_cmd,
                       "task_id must appear as a shlex-quoted token in the daemon tmux command")
 
+    def test_launch_agent_process_exports_task_spec_contract(self):
+        import importlib.util
+        import shlex
+
+        daemon_file = BASE / "orchestrator" / "bin" / "zoe-daemon.py"
+        spec = importlib.util.spec_from_file_location("zoe_daemon", daemon_file)
+        daemon_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(daemon_mod)
+
+        runner_path = self.wt / "run-codex-agent.sh"
+        runner_path.touch(mode=0o755)
+        task = {"id": "task-1", "model": "gpt-5.3-codex", "effort": "high"}
+        task_spec_file = self.wt / "task-spec.json"
+        task_spec_file.write_text('{"allowedPaths": ["skills/**"]}', encoding="utf-8")
+        contract_dir = self.wt / ".task-contract"
+        contract_dir.mkdir(parents=True, exist_ok=True)
+        scope_manifest = contract_dir / "scope-manifest.json"
+        scope_manifest.write_text('{"sparsePatterns": ["skills/**"]}', encoding="utf-8")
+
+        captured_cmds = []
+
+        def fake_sh(cmd, **kwargs):
+            captured_cmds.append(cmd)
+            return ""
+
+        with patch.object(daemon_mod, "sh", side_effect=fake_sh), \
+             patch.object(daemon_mod, "tmux_available", return_value=True), \
+             patch.object(daemon_mod, "tmux_has", return_value=False):
+            daemon_mod.launch_agent_process(runner_path, task, self.wt, self.wt / "prompt.txt", task_spec_file)
+
+        tmux_calls = [c for c in captured_cmds if "new-session" in c]
+        self.assertTrue(tmux_calls, "tmux new-session not called")
+        shell_cmd = tmux_calls[0][-1]
+        self.assertIn(f"TASK_SPEC_FILE={shlex.quote(str(task_spec_file))}", shell_cmd)
+        self.assertIn("TASK_SPEC_REQUIRED=1", shell_cmd)
+        self.assertIn(f"SCOPE_MANIFEST_FILE={shlex.quote(str(scope_manifest))}", shell_cmd)
+
+    def test_scope_manifest_and_sparse_checkout_patterns_are_generated(self):
+        import importlib.util
+
+        daemon_file = BASE / "orchestrator" / "bin" / "zoe-daemon.py"
+        spec = importlib.util.spec_from_file_location("zoe_daemon", daemon_file)
+        daemon_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(daemon_mod)
+
+        repo_root = self.wt / "repo"
+        repo_root.mkdir(parents=True, exist_ok=True)
+        task_spec = {
+            "allowedPaths": [str(repo_root / "skills" / "sonos-pure-play" / "**")],
+            "mustTouch": [str(repo_root / "skills" / "sonos-pure-play" / "scripts" / "query-planner.mjs")],
+            "forbiddenPaths": [str(repo_root / "src" / "**")],
+        }
+        manifest = daemon_mod._write_scope_manifest(self.wt, repo_root, task_spec)
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertIn("skills/sonos-pure-play/**", payload["sparsePatterns"])
+        self.assertIn("skills/sonos-pure-play/scripts", payload["sparsePatterns"])
+
+    def test_apply_sparse_checkout_if_scoped_uses_git_sparse_checkout(self):
+        import importlib.util
+
+        daemon_file = BASE / "orchestrator" / "bin" / "zoe-daemon.py"
+        spec = importlib.util.spec_from_file_location("zoe_daemon", daemon_file)
+        daemon_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(daemon_mod)
+
+        repo_root = self.wt / "repo"
+        repo_root.mkdir(parents=True, exist_ok=True)
+        task_spec = {
+            "allowedPaths": [str(repo_root / "skills" / "sonos-pure-play" / "**")],
+            "mustTouch": [str(repo_root / "skills" / "sonos-pure-play" / "scripts" / "query-planner.mjs")],
+        }
+        captured_cmds = []
+
+        def fake_sh(cmd, **kwargs):
+            captured_cmds.append(cmd)
+            return ""
+
+        with patch.object(daemon_mod, "sh", side_effect=fake_sh):
+            applied = daemon_mod._apply_sparse_checkout_if_scoped(repo_root, self.wt, task_spec)
+
+        self.assertTrue(applied)
+        self.assertEqual(captured_cmds[0][:3], ["git", "sparse-checkout", "init"])
+        self.assertEqual(captured_cmds[1][:3], ["git", "sparse-checkout", "set"])
+
 
 # ---------------------------------------------------------------------------
 # C3: cmd_kill sends SIGTERM before SIGKILL
