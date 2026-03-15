@@ -36,7 +36,7 @@ Language: [English](README.md) | **简体中文**
 
 ### 前置要求
 
-- Python 3.12+
+- Python 3.11+
 - Node.js（OpenClaw 运行需要）
 - tmux（可选）
 - GitHub CLI（可选）
@@ -48,9 +48,21 @@ git clone https://github.com/gordon8018/ai-devops.git
 cd ai-devops
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -U pip setuptools wheel
+pip install -e .
 pip install pytest pytest-cov python-dotenv
 ```
+
+### 本地路径 / 基础目录
+
+所有任务状态、队列文件、worktree 和 SQLite 数据都相对于 `AI_DEVOPS_HOME` 解析。
+如果你希望仓库直接在当前 checkout 路径下运行，建议显式导出：
+
+```bash
+export AI_DEVOPS_HOME="$(pwd)"
+```
+
+如果不设置，默认基础目录仍然是 `~/ai-devops`。
 
 ### 环境变量
 

@@ -155,7 +155,7 @@ sequenceDiagram
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.11+
 - Node.js (for OpenClaw)
 - tmux (optional, for agent sessions)
 - GitHub CLI (optional, for PR monitoring)
@@ -168,9 +168,21 @@ git clone https://github.com/gordon8018/ai-devops.git
 cd ai-devops
 python3 -m venv .venv
 source .venv/bin/activate
+pip install -U pip setuptools wheel
 pip install -e .
 pip install pytest pytest-cov python-dotenv
 ```
+
+### Local Path / Base Directory
+
+All task state, queue files, worktrees, and SQLite data resolve relative to `AI_DEVOPS_HOME`.
+If you want the repo to run from its current checkout path, export it explicitly:
+
+```bash
+export AI_DEVOPS_HOME="$(pwd)"
+```
+
+If unset, the default base directory remains `~/ai-devops`.
 
 ### Environment Setup
 
