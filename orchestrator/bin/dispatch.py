@@ -122,8 +122,34 @@ def _constraint_path_list(raw: dict[str, Any] | None, *keys: str) -> list[str]:
     return deduped
 
 
+def _normalize_constraint_path(value: str, repo_root: Path) -> str:
+    text = str(value).strip().replace("\\", "/")
+    if not text:
+        return ""
+
+    wildcard_suffix = ""
+    if text.endswith("/**"):
+        wildcard_suffix = "/**"
+        text = text[:-3]
+
+    candidate = Path(text)
+    if candidate.is_absolute():
+        try:
+            text = str(candidate.resolve().relative_to(repo_root.resolve())).replace("\\", "/")
+        except Exception:
+            text = str(candidate.resolve()).replace("\\", "/")
+    else:
+        text = text.lstrip("./")
+
+    text = text.rstrip("/")
+    return f"{text}{wildcard_suffix}" if text else wildcard_suffix
+
+
 def _path_matches_constraint(path: str, rule: str, worktree: Path) -> bool:
-    normalized = path.replace("\\", "/").lstrip("./")
+    normalized = _normalize_constraint_path(path, worktree)
+    if not normalized:
+        return False
+
     candidate_paths = {normalized}
     try:
         abs_path = (worktree / normalized).resolve()
@@ -131,7 +157,7 @@ def _path_matches_constraint(path: str, rule: str, worktree: Path) -> bool:
     except OSError:
         pass
 
-    normalized_rule = rule.replace("\\", "/").rstrip("/")
+    normalized_rule = _normalize_constraint_path(rule, worktree)
     if not normalized_rule:
         return False
     if any(ch in normalized_rule for ch in "*?["):
@@ -149,26 +175,36 @@ def _path_matches_constraint(path: str, rule: str, worktree: Path) -> bool:
 
 def _build_task_spec(plan: Plan, subtask: Subtask) -> dict[str, Any]:
     constraints = plan.constraints if isinstance(plan.constraints, dict) else {}
+    context = plan.context if isinstance(plan.context, dict) else {}
+    source_spec = context.get("taskSpec") if isinstance(context.get("taskSpec"), dict) else {}
     return {
+        **source_spec,
         "repo": plan.repo,
         "planId": plan.plan_id,
         "subtaskId": subtask.id,
         "subtaskTitle": subtask.title,
         "filesHint": list(subtask.files_hint),
-        "allowedPaths": _constraint_path_list(constraints, "allowedPaths"),
-        "forbiddenPaths": _constraint_path_list(constraints, "forbiddenPaths", "blockedPaths"),
-        "mustTouch": _constraint_path_list(constraints, "mustTouch", "requiredTouchedPaths"),
+        "allowedPaths": _constraint_path_list(source_spec or constraints, "allowedPaths"),
+        "forbiddenPaths": _constraint_path_list(source_spec or constraints, "forbiddenPaths", "blockedPaths"),
+        "mustTouch": _constraint_path_list(source_spec or constraints, "mustTouch", "requiredTouchedPaths"),
         "definitionOfDone": list(subtask.definition_of_done),
     }
 
 
 def _validate_subtask_scope(plan: Plan, subtask: Subtask, base_dir: Path) -> None:
     constraints = plan.constraints if isinstance(plan.constraints, dict) else {}
+    context = plan.context if isinstance(plan.context, dict) else {}
+    task_spec = context.get("taskSpec") if isinstance(context.get("taskSpec"), dict) else {}
     allowed = _constraint_path_list(constraints, "allowedPaths")
     forbidden = _constraint_path_list(constraints, "forbiddenPaths", "blockedPaths")
     must_touch = _constraint_path_list(constraints, "mustTouch", "requiredTouchedPaths")
     if not (allowed or forbidden or must_touch):
         return
+
+    if not task_spec:
+        raise DispatchError(
+            f"Cannot dispatch {subtask.id}: scoped tasks require context.taskSpec as the executable contract."
+        )
 
     worktree = base_dir / "repos" / plan.repo
     files_hint = list(subtask.files_hint)

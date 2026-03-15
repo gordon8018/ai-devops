@@ -3,9 +3,9 @@ import os
 
 import pytest
 
-from orchestrator.bin.zoe_tools import list_plans, plan_and_dispatch_task, task_status
+from orchestrator.bin.zoe_tools import build_plan_request, list_plans, plan_and_dispatch_task, task_status
 from orchestrator.bin.db import init_db, insert_task
-from orchestrator.bin.errors import DispatchError
+from orchestrator.bin.errors import DispatchError, InvalidPlan
 
 
 def make_task_input() -> dict[str, object]:
@@ -143,3 +143,55 @@ def test_build_plan_request_injects_success_patterns(tmp_path, monkeypatch):
     assert patterns is not None
     assert len(patterns) >= 1
     assert patterns[0]["title"] == "fix-auth"
+
+
+def test_build_plan_request_loads_task_spec_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(tmp_path))
+    spec = tmp_path / "task-spec.yaml"
+    spec.write_text(
+        """title: Strict Sonos skill update
+goal: |
+  Improve Sonos behavior only inside the sonos-pure-play skill.
+repo: demo-repo
+workingRoot: /tmp/demo
+allowedPaths:
+  - /tmp/demo/skills/sonos-pure-play/**
+forbiddenPaths:
+  - /tmp/demo/src/**
+mustTouch:
+  - /tmp/demo/skills/sonos-pure-play/scripts/query-planner.mjs
+definitionOfDone:
+  - Stay inside allowed paths.
+validation:
+  - Run targeted tests.
+firstStepRequirement: List exact files before editing.
+failureRules:
+  - Stop on out-of-scope edits.
+""",
+        encoding="utf-8",
+    )
+
+    result = build_plan_request({
+        "taskSpecFile": str(spec),
+        "requested_by": "zoe",
+        "requested_at": 1741910400000,
+    })
+    assert result["repo"] == "demo-repo"
+    assert result["title"] == "Strict Sonos skill update"
+    assert result["constraints"]["allowedPaths"] == ["/tmp/demo/skills/sonos-pure-play/**"]
+    assert result["context"]["taskSpec"]["mustTouch"] == ["/tmp/demo/skills/sonos-pure-play/scripts/query-planner.mjs"]
+
+
+def test_build_plan_request_rejects_scoped_task_without_task_spec():
+    with pytest.raises(InvalidPlan, match="Scoped tasks must provide a valid TASK_SPEC"):
+        build_plan_request({
+            "repo": "demo-repo",
+            "title": "Strict Sonos skill update",
+            "description": "Scoped fix",
+            "requested_by": "zoe",
+            "requested_at": 1741910400000,
+            "constraints": {
+                "allowedPaths": ["/tmp/demo/skills/sonos-pure-play/**"],
+                "mustTouch": ["/tmp/demo/skills/sonos-pure-play/scripts/query-planner.mjs"],
+            },
+        })

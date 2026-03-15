@@ -16,7 +16,7 @@ from orchestrator.bin.dispatch import (
     load_dispatch_state, save_dispatch_state,
     ready_subtask_ids, topologically_sorted_subtask_ids,
     build_execution_task, archive_subtasks, update_subtask_archive,
-    dispatch_ready_subtasks, dispatch_plan_file,
+    dispatch_ready_subtasks, dispatch_plan_file, _path_matches_constraint,
 )
 from orchestrator.bin.errors import DispatchError
 from orchestrator.bin.plan_schema import Plan, Subtask
@@ -248,6 +248,20 @@ class TestUpdateSubtaskArchive(unittest.TestCase):
         self.assertEqual(content["dispatch"]["queuedTaskId"], "task-123")
 
 
+class TestConstraintPathMatching(unittest.TestCase):
+    def test_matches_absolute_file_hint_against_absolute_allowed_glob(self):
+        repo_root = Path('/Users/nakamoto_jason/clawd')
+        path = '/Users/nakamoto_jason/clawd/skills/sonos-pure-play/scripts/query-planner.mjs'
+        rule = '/Users/nakamoto_jason/clawd/skills/sonos-pure-play/**'
+        self.assertTrue(_path_matches_constraint(path, rule, repo_root))
+
+    def test_matches_relative_file_hint_against_absolute_allowed_glob(self):
+        repo_root = Path('/Users/nakamoto_jason/clawd')
+        path = 'skills/sonos-pure-play/scripts/web-flow.mjs'
+        rule = '/Users/nakamoto_jason/clawd/skills/sonos-pure-play/**'
+        self.assertTrue(_path_matches_constraint(path, rule, repo_root))
+
+
 class TestDispatchReadySubtasks(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -286,6 +300,21 @@ class TestDispatchReadySubtasks(unittest.TestCase):
                 "allowedPaths": [str(self.base / "repos" / "demo-repo" / "skills" / "sonos-pure-play" / "**")],
                 "mustTouch": [str(self.base / "repos" / "demo-repo" / "skills" / "sonos-pure-play" / "scripts" / "query-planner.mjs")],
             },
+            context={
+                "taskSpec": {
+                    "title": "Scoped",
+                    "goal": "Scoped",
+                    "repo": "demo-repo",
+                    "workingRoot": str(self.base / "repos" / "demo-repo"),
+                    "allowedPaths": [str(self.base / "repos" / "demo-repo" / "skills" / "sonos-pure-play" / "**")],
+                    "forbiddenPaths": [],
+                    "mustTouch": [str(self.base / "repos" / "demo-repo" / "skills" / "sonos-pure-play" / "scripts" / "query-planner.mjs")],
+                    "definitionOfDone": ["Scoped only"],
+                    "validation": ["Run tests"],
+                    "firstStepRequirement": "List files first",
+                    "failureRules": ["Stop on drift"],
+                }
+            },
             subtasks=[
                 {
                     "id": "S1",
@@ -300,6 +329,69 @@ class TestDispatchReadySubtasks(unittest.TestCase):
 
         with self.assertRaises(DispatchError):
             dispatch_ready_subtasks(scoped_plan, base_dir=self.base, registry_items=[])
+
+    def test_dispatch_ready_subtasks_requires_task_spec_for_scoped_tasks(self):
+        scoped_plan = make_plan(
+            repo="demo-repo",
+            constraints={
+                "allowedPaths": [str(self.base / "repos" / "demo-repo" / "skills" / "sonos-pure-play" / "**")],
+                "mustTouch": [str(self.base / "repos" / "demo-repo" / "skills" / "sonos-pure-play" / "scripts" / "query-planner.mjs")],
+            },
+            subtasks=[
+                {
+                    "id": "S1",
+                    "title": "Scoped",
+                    "description": "Test",
+                    "dependsOn": [],
+                    "filesHint": ["skills/sonos-pure-play/scripts/query-planner.mjs"],
+                }
+            ],
+        )
+        archive_subtasks(scoped_plan, self.base)
+
+        with self.assertRaises(DispatchError):
+            dispatch_ready_subtasks(scoped_plan, base_dir=self.base, registry_items=[])
+
+    def test_dispatch_ready_subtasks_accepts_absolute_scoped_paths(self):
+        repo_root = self.base / "repos" / "demo-repo"
+        allowed = str(repo_root / "skills" / "sonos-pure-play" / "**")
+        must_touch = str(repo_root / "skills" / "sonos-pure-play" / "scripts" / "query-planner.mjs")
+        file_hint = str(repo_root / "skills" / "sonos-pure-play" / "scripts" / "query-planner.mjs")
+        scoped_plan = make_plan(
+            repo="demo-repo",
+            constraints={
+                "allowedPaths": [allowed],
+                "mustTouch": [must_touch],
+            },
+            context={
+                "taskSpec": {
+                    "title": "Scoped",
+                    "goal": "Scoped",
+                    "repo": "demo-repo",
+                    "workingRoot": str(repo_root),
+                    "allowedPaths": [allowed],
+                    "forbiddenPaths": [],
+                    "mustTouch": [must_touch],
+                    "definitionOfDone": ["Scoped only"],
+                    "validation": ["Run tests"],
+                    "firstStepRequirement": "List files first",
+                    "failureRules": ["Stop on drift"],
+                }
+            },
+            subtasks=[
+                {
+                    "id": "S1",
+                    "title": "Scoped",
+                    "description": "Test",
+                    "dependsOn": [],
+                    "filesHint": [file_hint],
+                }
+            ],
+        )
+        archive_subtasks(scoped_plan, self.base)
+        queued = dispatch_ready_subtasks(scoped_plan, base_dir=self.base, registry_items=[])
+        self.assertEqual(len(queued), 1)
+        self.assertIn("test-plan-S1", str(queued[0]))
 
 
 class TestDispatchPlanFileHardening(unittest.TestCase):

@@ -13,6 +13,13 @@ from .errors import InvalidPlan, PlannerError, PolicyViolation
 from .monitor_helpers import restart_agent as _restart_agent
 from .planner_engine import ZoePlannerEngine
 from .plan_schema import Plan, sanitize_identifier
+from .task_spec import (
+    TaskSpecError,
+    load_task_spec_file,
+    scoped_task_requires_task_spec,
+    task_spec_to_task_input,
+    validate_task_spec,
+)
 
 SCHEMA_VERSION = "1.0"
 RISK_PATTERNS = {
@@ -116,6 +123,38 @@ def _inject_success_patterns(context: dict, *, repo: str, base_dir: Path | None 
 
 
 def build_plan_request(task_input: dict[str, Any], *, base_dir: Path | None = None) -> dict[str, Any]:
+    task_input = dict(task_input)
+
+    task_spec_payload = task_input.get("taskSpec")
+    task_spec_file = task_input.get("taskSpecFile")
+    if task_spec_file:
+        try:
+            task_spec_payload = load_task_spec_file(str(task_spec_file))
+        except TaskSpecError as exc:
+            raise InvalidPlan(str(exc)) from exc
+    if isinstance(task_spec_payload, dict):
+        try:
+            validated_spec = validate_task_spec(task_spec_payload)
+        except TaskSpecError as exc:
+            raise InvalidPlan(str(exc)) from exc
+        merged = task_spec_to_task_input(validated_spec)
+        task_input = {
+            **merged,
+            **task_input,
+            "repo": merged["repo"],
+            "title": merged["title"],
+            "description": merged["description"],
+            "constraints": {**merged.get("constraints", {}), **dict(task_input.get("constraints") or {})},
+            "context": {**merged.get("context", {}), **dict(task_input.get("context") or {})},
+            "taskSpec": validated_spec,
+        }
+
+    if scoped_task_requires_task_spec(task_input) and not isinstance(task_input.get("taskSpec"), dict):
+        raise InvalidPlan(
+            "Scoped tasks must provide a valid TASK_SPEC via taskSpec or taskSpecFile. "
+            "Do not dispatch allowedPaths/forbiddenPaths/mustTouch as free-form fields alone."
+        )
+
     requested_at = int(task_input.get("requested_at") or task_input.get("requestedAt") or 0)
     if requested_at <= 0:
         requested_at = int(time.time() * 1000)
@@ -146,6 +185,8 @@ def build_plan_request(task_input: dict[str, Any], *, base_dir: Path | None = No
     risk_flags = validate_task_policy({"objective": objective})
     context = dict(task_input.get("context") or {})
     context.setdefault("riskFlags", risk_flags)
+    if isinstance(task_input.get("taskSpec"), dict):
+        context.setdefault("taskSpec", dict(task_input["taskSpec"]))
     _inject_success_patterns(context, repo=repo, base_dir=base_dir)
 
     return {
