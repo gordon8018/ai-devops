@@ -1,8 +1,11 @@
 import json
 import os
 
+import pytest
+
 from orchestrator.bin.zoe_tools import list_plans, plan_and_dispatch_task, task_status
 from orchestrator.bin.db import init_db, insert_task
+from orchestrator.bin.errors import DispatchError
 
 
 def make_task_input() -> dict[str, object]:
@@ -23,9 +26,11 @@ def test_plan_and_dispatch_task_archives_plan_and_queues_first_subtask(tmp_path,
     repo_root = base / "repos" / "demo-repo"
     (repo_root / "src" / "auth").mkdir(parents=True)
     (repo_root / "tests").mkdir(parents=True)
+    (repo_root / ".git").write_text("gitdir: /tmp/demo-repo.git\n", encoding="utf-8")
     (repo_root / "src" / "auth" / "session.ts").write_text("export const session = {};\n", encoding="utf-8")
     (repo_root / "tests" / "test_auth.ts").write_text("console.log('test')\n", encoding="utf-8")
     monkeypatch.setenv("AI_DEVOPS_HOME", str(base))
+    monkeypatch.setattr("orchestrator.bin.dispatch._daemon_running", lambda: True)
 
     result = plan_and_dispatch_task(make_task_input(), base_dir=base)
 
@@ -35,6 +40,27 @@ def test_plan_and_dispatch_task_archives_plan_and_queues_first_subtask(tmp_path,
     queue_payload = json.loads(result.queued_paths[0].read_text(encoding="utf-8"))
     assert queue_payload["metadata"]["plannedBy"] == "zoe"
     assert queue_payload["metadata"]["planId"] == result.plan.plan_id
+
+
+def test_plan_and_dispatch_task_requires_running_daemon(tmp_path, monkeypatch) -> None:
+    base = tmp_path / "ai-devops"
+    repo_root = base / "repos" / "demo-repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").write_text("gitdir: /tmp/demo-repo.git\n", encoding="utf-8")
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(base))
+    monkeypatch.setattr("orchestrator.bin.dispatch._daemon_running", lambda: False)
+
+    with pytest.raises(DispatchError, match="zoe-daemon.py is not running"):
+        plan_and_dispatch_task(make_task_input(), base_dir=base)
+
+
+def test_plan_and_dispatch_task_requires_repo_checkout(tmp_path, monkeypatch) -> None:
+    base = tmp_path / "ai-devops"
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(base))
+    monkeypatch.setattr("orchestrator.bin.dispatch._daemon_running", lambda: True)
+
+    with pytest.raises(DispatchError, match="repo checkout not found"):
+        plan_and_dispatch_task(make_task_input(), base_dir=base)
 
 
 def test_task_status_and_list_plans_read_tool_layer_state(tmp_path, monkeypatch) -> None:
