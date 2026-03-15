@@ -226,21 +226,23 @@ if __name__ == "__main__":
 
 def test_plan_status_command_help():
     """Smoke test: plan-status subcommand is registered."""
-    import subprocess, sys
+    import subprocess, sys, pathlib
+    repo_root = str(pathlib.Path(__file__).parent.parent)
     result = subprocess.run(
         [sys.executable, "orchestrator/bin/agent.py", "plan-status", "--help"],
         capture_output=True, text=True,
-        cwd="/home/gordonyang/workspace/myproject/ai-devops/.worktrees/feat-plan-status-viz"
+        cwd=repo_root
     )
     assert result.returncode == 0
     assert "plan_id" in result.stdout or "plan-status" in result.stdout
 
 def test_plans_command_help():
     """Smoke test: plans subcommand is registered."""
-    import subprocess, sys
+    import subprocess, sys, pathlib
+    repo_root = str(pathlib.Path(__file__).parent.parent)
     result = subprocess.run(
         [sys.executable, "orchestrator/bin/agent.py", "plans", "--help"],
         capture_output=True, text=True,
-        cwd="/home/gordonyang/workspace/myproject/ai-devops/.worktrees/feat-plan-status-viz"
+        cwd=repo_root
     )
     assert result.returncode == 0
