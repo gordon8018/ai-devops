@@ -6,6 +6,19 @@ metadata: {"openclaw":{"emoji":"🛠️","os":["linux"],"requires":{"bins":["pyt
 
 # Zoe Local Tools
 
+Use this skill when the user asks you to do one of these things in the local `ai-devops` system.
+
+## Important local-install note
+
+This skill file living inside the repository does **not** mean OpenClaw will automatically discover and use it on another machine.
+To make it usable in a real OpenClaw workspace, install or copy this skill into one of these locations:
+
+- `<workspace>/skills/zoe-local-tools/`
+- `~/.openclaw/skills/zoe-local-tools/`
+
+If you keep using the repo-local copy, make sure the helper script can resolve the real repository path via `AI_DEVOPS_HOME`.
+Do not assume `/home/user01/ai-devops` exists.
+
 Use this skill when the user asks you to do one of these things in the local `ai-devops` system:
 
 - plan a high-level engineering task
@@ -25,18 +38,25 @@ Use the helper script in this skill:
 {baseDir}/scripts/invoke_zoe_tool.sh call <tool-name> --args-file /tmp/zoe-tool-args.json
 ```
 
-The helper script calls the local Zoe JSON tool adapter in `/home/user01/ai-devops` and returns structured JSON.
+The helper script calls the local Zoe JSON tool adapter and returns structured JSON.
+Before using it, ensure `AI_DEVOPS_HOME` points at the actual checkout path for this machine, or install a managed override of this skill whose script hardcodes the local path.
 Prefer `--args-file` for any non-trivial payload so shell quoting does not corrupt JSON.
 
 ## Recommended Workflow
 
-1. If you have not used these tools in the current session, inspect the schema first:
+1. If you have not used these tools in the current session, run the health preflight first:
 
 ```bash
+{baseDir}/scripts/invoke_zoe_tool.sh doctor
 {baseDir}/scripts/invoke_zoe_tool.sh schema
 ```
 
-2. Choose the right tool:
+2. Before `plan_and_dispatch_task`, verify these conditions:
+- `zoe-daemon.py` is running, otherwise tasks will queue but never start
+- the target repository exists under `$AI_DEVOPS_HOME/repos/<owner>/<repo>` (or is linked there)
+- `monitor.py` is running if the user expects PR/CI progress tracking and completion updates
+
+3. Choose the right tool:
 
 - `plan_task`: generate a validated plan only
 - `plan_and_dispatch_task`: generate a plan and queue the first runnable subtasks
@@ -45,7 +65,7 @@ Prefer `--args-file` for any non-trivial payload so shell quoting does not corru
 - `list_plans`: list recent archived plans
 - `retry_task`: manually retry a failed or blocked task by task_id
 
-3. For planning requests, send a complete payload. Minimum useful fields:
+4. For planning requests, send a complete payload. Minimum useful fields:
 
 ```json
 {
@@ -72,7 +92,7 @@ JSON
 {baseDir}/scripts/invoke_zoe_tool.sh call plan_and_dispatch_task --args-file /tmp/zoe-tool-args.json
 ```
 
-4. For status requests:
+5. For status requests:
 
 - single task:
 
@@ -101,7 +121,7 @@ JSON
 {baseDir}/scripts/invoke_zoe_tool.sh call list_plans --args-file /tmp/zoe-tool-args.json
 ```
 
-5. To retry a failed or blocked task:
+6. To retry a failed or blocked task:
 
 ```bash
 cat >/tmp/zoe-tool-args.json <<'JSON'

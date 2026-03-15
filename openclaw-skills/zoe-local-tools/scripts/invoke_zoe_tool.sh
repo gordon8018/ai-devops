@@ -16,9 +16,32 @@ fi
 
 COMMAND="${1:-}"
 
+daemon_running() {
+  pgrep -f 'orchestrator/bin/zoe-daemon.py' >/dev/null 2>&1
+}
+
+monitor_running() {
+  pgrep -f 'orchestrator/bin/monitor.py' >/dev/null 2>&1
+}
+
 case "${COMMAND}" in
   schema)
     exec "${PYTHON_BIN}" "${API_BIN}" schema --pretty
+    ;;
+  doctor)
+    echo "ai_devops_home=$REPO_ROOT"
+    echo "python_bin=$PYTHON_BIN"
+    echo "api_bin=$API_BIN"
+    if daemon_running; then
+      echo "zoe_daemon=running"
+    else
+      echo "zoe_daemon=missing"
+    fi
+    if monitor_running; then
+      echo "monitor=running"
+    else
+      echo "monitor=missing"
+    fi
     ;;
   call)
     TOOL_NAME="${2:-}"
@@ -49,6 +72,7 @@ case "${COMMAND}" in
   *)
     echo "usage:" >&2
     echo "  invoke_zoe_tool.sh schema" >&2
+    echo "  invoke_zoe_tool.sh doctor" >&2
     echo "  invoke_zoe_tool.sh call <tool-name> '<json-args>'" >&2
     exit 1
     ;;

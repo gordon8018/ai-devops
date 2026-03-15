@@ -36,7 +36,7 @@ Language: [English](README.md) | **简体中文**
 
 ### 前置要求
 
-- Python 3.12+
+- Python 3.11+
 - Node.js（OpenClaw 运行需要）
 - tmux（可选）
 - GitHub CLI（可选）
@@ -48,9 +48,32 @@ git clone https://github.com/gordon8018/ai-devops.git
 cd ai-devops
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -U pip setuptools wheel
+pip install -e .
 pip install pytest pytest-cov python-dotenv
 ```
+
+### 本地路径 / 基础目录
+
+所有任务状态、队列文件、worktree 和 SQLite 数据都相对于 `AI_DEVOPS_HOME` 解析。
+如果你希望仓库直接在当前 checkout 路径下运行，建议显式导出：
+
+```bash
+export AI_DEVOPS_HOME="$(pwd)"
+```
+
+如果不设置，默认基础目录仍然是 `~/ai-devops`。
+
+### 使用仓库内附带的 OpenClaw Skill
+
+仓库里虽然带有 `openclaw-skills/zoe-local-tools/`，但**仅仅 clone 仓库并不代表 OpenClaw 会自动发现并启用它**。
+如果要在真实 OpenClaw 环境中使用，请把这个 skill 复制或安装到以下发现路径之一：
+
+- `<workspace>/skills/zoe-local-tools/`
+- `~/.openclaw/skills/zoe-local-tools/`
+
+如果你仍然直接使用仓库里的 helper script，请先设置 `AI_DEVOPS_HOME`，让脚本能够解析当前机器上的真实 checkout 路径。
+不要假设所有机器都有 `/home/user01/ai-devops` 这个固定路径。
 
 ### 环境变量
 

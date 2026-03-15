@@ -155,7 +155,7 @@ sequenceDiagram
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.11+
 - Node.js (for OpenClaw)
 - tmux (optional, for agent sessions)
 - GitHub CLI (optional, for PR monitoring)
@@ -168,9 +168,43 @@ git clone https://github.com/gordon8018/ai-devops.git
 cd ai-devops
 python3 -m venv .venv
 source .venv/bin/activate
+pip install -U pip setuptools wheel
 pip install -e .
 pip install pytest pytest-cov python-dotenv
 ```
+
+### Local Path / Base Directory
+
+All task state, queue files, worktrees, and SQLite data resolve relative to `AI_DEVOPS_HOME`.
+If you want the repo to run from its current checkout path, export it explicitly:
+
+```bash
+export AI_DEVOPS_HOME="$(pwd)"
+```
+
+If unset, the default base directory remains `~/ai-devops`.
+
+### Using the bundled OpenClaw skill
+
+This repository includes an OpenClaw skill at `openclaw-skills/zoe-local-tools/`, but that repo-local copy is **not** automatically active just because the repository was cloned.
+For a real OpenClaw installation, copy or install the skill into one of these discovery paths:
+
+- `<workspace>/skills/zoe-local-tools/`
+- `~/.openclaw/skills/zoe-local-tools/`
+
+If you keep using the repo-local helper script directly, set `AI_DEVOPS_HOME` first so the script resolves the correct checkout path on that machine.
+Do not assume a fixed path like `/home/user01/ai-devops` exists everywhere.
+
+Before asking an agent to dispatch coding work, run this preflight:
+
+```bash
+openclaw-skills/zoe-local-tools/scripts/invoke_zoe_tool.sh doctor
+```
+
+A healthy dispatch path needs all three:
+- `zoe-daemon.py` running (otherwise tasks sit in queue and never start)
+- the target repo present under `$AI_DEVOPS_HOME/repos/<owner>/<repo>` or linked there
+- `monitor.py` running if you expect automatic PR/CI progress tracking and completion feedback
 
 ### Environment Setup
 
