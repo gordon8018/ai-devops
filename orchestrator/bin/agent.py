@@ -56,6 +56,14 @@ def get_zoe_tools():
     return zoe_tools
 
 
+# Lazy import — only needed for plan-status/plans commands
+def _get_plan_status_modules():
+    import plan_status as _ps
+    import plan_status_renderer as _psr
+    import plan_status_server as _pss
+    return _ps, _psr, _pss
+
+
 # ============================================================================
 # 命令实现
 # ============================================================================
@@ -378,6 +386,70 @@ def cmd_clean(args):
         print(f"\nDry run - use without --dry-run to delete")
 
 
+def cmd_plan_status(args):
+    """Display plan status with rich TUI."""
+    init_db()
+    ps, psr, pss = _get_plan_status_modules()
+
+    server = None
+    if args.html:
+        server = pss.PlanStatusServer(plan_id=args.plan_id)
+        url = server.start(open_browser=True)
+        print(f"✓ Dashboard: {url}")
+        if args.no_tui:
+            print("Press Ctrl+C to stop server.")
+            try:
+                import time
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                server.stop()
+                return
+
+    try:
+        psr.watch_plan(
+            args.plan_id,
+            interval=args.interval,
+            once=not args.watch,
+        )
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if server:
+            server.stop()
+
+
+def cmd_plans(args):
+    """List recent plans with progress summary."""
+    init_db()
+    ps, psr, _ = _get_plan_status_modules()
+
+    views = ps.list_plan_views(limit=args.limit)
+    if not views:
+        print("No plans found.")
+        return
+
+    from agent_utils import format_timestamp
+    header = f"{'PLAN-ID':<35} {'PROGRESS':<10} {'STATUS':<12} {'REPO':<25} STARTED"
+    print(header)
+    print("-" * len(header))
+    for pv in views:
+        active_statuses = {s.status for s in pv.subtasks}
+        if "running" in active_statuses or "retrying" in active_statuses:
+            overall = "running"
+        elif all(s.status in ("ready", "merged") for s in pv.subtasks) and pv.subtasks:
+            overall = "done"
+        elif any(s.status == "blocked" for s in pv.subtasks):
+            overall = "blocked"
+        else:
+            overall = "partial"
+        started = format_timestamp(pv.requested_at)[:16] if pv.requested_at else "—"
+        print(
+            f"{pv.plan_id:<35} {pv.completed_count}/{pv.total_count:<8} "
+            f"{overall:<12} {pv.repo:<25} {started}"
+        )
+
+
 # ============================================================================
 # 主入口
 # ============================================================================
@@ -484,7 +556,21 @@ Examples:
     p.add_argument("--days", type=int, default=30, help="Delete tasks older than N days")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_clean)
-    
+
+    # plan 状态
+    p = subparsers.add_parser("plan-status", help="Show plan execution status (TUI + optional browser)")
+    p.add_argument("plan_id", help="Plan ID")
+    p.add_argument("--watch", action="store_true", help="Auto-refresh TUI")
+    p.add_argument("--interval", type=int, default=5, help="Refresh interval in seconds")
+    p.add_argument("--html", action="store_true", help="Open browser dashboard")
+    p.add_argument("--no-tui", action="store_true", dest="no_tui", help="Skip terminal TUI (browser only)")
+    p.set_defaults(func=cmd_plan_status)
+
+    # 列出 plans
+    p = subparsers.add_parser("plans", help="List recent plans with progress summary")
+    p.add_argument("--limit", type=int, default=10)
+    p.set_defaults(func=cmd_plans)
+
     args = parser.parse_args()
     args.func(args)
 

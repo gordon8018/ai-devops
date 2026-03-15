@@ -222,3 +222,25 @@ class TestAgentSpawnEdgeCases(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_plan_status_command_help():
+    """Smoke test: plan-status subcommand is registered."""
+    import subprocess, sys
+    result = subprocess.run(
+        [sys.executable, "orchestrator/bin/agent.py", "plan-status", "--help"],
+        capture_output=True, text=True,
+        cwd="/home/gordonyang/workspace/myproject/ai-devops/.worktrees/feat-plan-status-viz"
+    )
+    assert result.returncode == 0
+    assert "plan_id" in result.stdout or "plan-status" in result.stdout
+
+def test_plans_command_help():
+    """Smoke test: plans subcommand is registered."""
+    import subprocess, sys
+    result = subprocess.run(
+        [sys.executable, "orchestrator/bin/agent.py", "plans", "--help"],
+        capture_output=True, text=True,
+        cwd="/home/gordonyang/workspace/myproject/ai-devops/.worktrees/feat-plan-status-viz"
+    )
+    assert result.returncode == 0
