@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 from pathlib import Path
@@ -99,6 +100,110 @@ def _canonical_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _constraint_path_list(raw: dict[str, Any] | None, *keys: str) -> list[str]:
+    if not isinstance(raw, dict):
+        return []
+    values: list[str] = []
+    for key in keys:
+        items = raw.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            text = str(item).strip()
+            if text:
+                values.append(text)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
+def _path_matches_constraint(path: str, rule: str, worktree: Path) -> bool:
+    normalized = path.replace("\\", "/").lstrip("./")
+    candidate_paths = {normalized}
+    try:
+        abs_path = (worktree / normalized).resolve()
+        candidate_paths.add(str(abs_path).replace("\\", "/"))
+    except OSError:
+        pass
+
+    normalized_rule = rule.replace("\\", "/").rstrip("/")
+    if not normalized_rule:
+        return False
+    if any(ch in normalized_rule for ch in "*?["):
+        patterns = {normalized_rule}
+        if normalized_rule.endswith("/**"):
+            patterns.add(normalized_rule[:-3])
+            patterns.add(normalized_rule[:-3] + "/*")
+        return any(any(fnmatch.fnmatch(candidate, pat) for pat in patterns) for candidate in candidate_paths)
+
+    return any(
+        candidate == normalized_rule or candidate.startswith(normalized_rule + "/")
+        for candidate in candidate_paths
+    )
+
+
+def _build_task_spec(plan: Plan, subtask: Subtask) -> dict[str, Any]:
+    constraints = plan.constraints if isinstance(plan.constraints, dict) else {}
+    return {
+        "repo": plan.repo,
+        "planId": plan.plan_id,
+        "subtaskId": subtask.id,
+        "subtaskTitle": subtask.title,
+        "filesHint": list(subtask.files_hint),
+        "allowedPaths": _constraint_path_list(constraints, "allowedPaths"),
+        "forbiddenPaths": _constraint_path_list(constraints, "forbiddenPaths", "blockedPaths"),
+        "mustTouch": _constraint_path_list(constraints, "mustTouch", "requiredTouchedPaths"),
+        "definitionOfDone": list(subtask.definition_of_done),
+    }
+
+
+def _validate_subtask_scope(plan: Plan, subtask: Subtask, base_dir: Path) -> None:
+    constraints = plan.constraints if isinstance(plan.constraints, dict) else {}
+    allowed = _constraint_path_list(constraints, "allowedPaths")
+    forbidden = _constraint_path_list(constraints, "forbiddenPaths", "blockedPaths")
+    must_touch = _constraint_path_list(constraints, "mustTouch", "requiredTouchedPaths")
+    if not (allowed or forbidden or must_touch):
+        return
+
+    worktree = base_dir / "repos" / plan.repo
+    files_hint = list(subtask.files_hint)
+    if not files_hint:
+        raise DispatchError(
+            f"Cannot dispatch {subtask.id}: scoped task has no filesHint/taskSpec targets."
+        )
+
+    outside_allowed = [
+        path for path in files_hint
+        if allowed and not any(_path_matches_constraint(path, rule, worktree) for rule in allowed)
+    ]
+    if outside_allowed:
+        raise DispatchError(
+            f"Cannot dispatch {subtask.id}: filesHint outside allowedPaths: {', '.join(outside_allowed[:5])}"
+        )
+
+    forbidden_hits = [
+        path for path in files_hint
+        if any(_path_matches_constraint(path, rule, worktree) for rule in forbidden)
+    ]
+    if forbidden_hits:
+        raise DispatchError(
+            f"Cannot dispatch {subtask.id}: filesHint intersects forbidden paths: {', '.join(forbidden_hits[:5])}"
+        )
+
+    if must_touch and not any(
+        any(_path_matches_constraint(path, rule, worktree) for rule in must_touch)
+        for path in files_hint
+    ):
+        raise DispatchError(
+            f"Cannot dispatch {subtask.id}: filesHint misses required mustTouch paths."
+        )
+
+
 def _validate_plan_id_collision(plan: Plan, base_dir: Path) -> None:
     """防止不同计划复用同一 planId，导致依赖链串扰。"""
     archived_plan_file = plan_dir(plan, base_dir) / "plan.json"
@@ -157,6 +262,7 @@ def topologically_sorted_subtask_ids(plan: Plan) -> list[str]:
 
 
 def build_execution_task(plan: Plan, subtask: Subtask, planned_by: str = "zoe") -> dict[str, Any]:
+    task_spec = _build_task_spec(plan, subtask)
     return {
         "id": execution_task_id(plan, subtask),
         "repo": plan.repo,
@@ -180,6 +286,7 @@ def build_execution_task(plan: Plan, subtask: Subtask, planned_by: str = "zoe") 
             "objective": plan.objective,
             "constraints": plan.constraints,
             "context": plan.context,
+            "taskSpec": task_spec,
         },
     }
 
@@ -247,6 +354,7 @@ def dispatch_ready_subtasks(
         if not all(dep in completed for dep in subtask.depends_on):
             continue
 
+        _validate_subtask_scope(plan, subtask, root)
         task_payload = build_execution_task(plan, subtask)
         queue_path = queue_root / f"{task_payload['id']}.json"
         queue_path.write_text(json.dumps(task_payload, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -154,12 +154,19 @@ def _scope_violation(task: dict, worktree: Path, *, enforce_must_touch: bool = F
             metadata = {}
     if not isinstance(metadata, dict):
         metadata = {}
+    task_spec = metadata.get("taskSpec") if isinstance(metadata.get("taskSpec"), dict) else {}
     constraints = metadata.get("constraints") if isinstance(metadata.get("constraints"), dict) else {}
     allowed = _constraint_path_list(constraints, "allowedPaths")
     forbidden = _constraint_path_list(constraints, "forbiddenPaths", "blockedPaths")
     must_touch = _constraint_path_list(constraints, "mustTouch", "requiredTouchedPaths")
+    if task_spec:
+        allowed = _constraint_path_list(task_spec, "allowedPaths") or allowed
+        forbidden = _constraint_path_list(task_spec, "forbiddenPaths", "blockedPaths") or forbidden
+        must_touch = _constraint_path_list(task_spec, "mustTouch", "requiredTouchedPaths") or must_touch
     touched = _git_touched_files(worktree)
     if not touched:
+        if enforce_must_touch and (allowed or must_touch):
+            return ("no scoped repository edits detected before completion", touched)
         return None
 
     forbidden_hits = [path for path in touched if any(_path_matches_constraint(path, rule, worktree) for rule in forbidden)]
@@ -173,6 +180,14 @@ def _scope_violation(task: dict, worktree: Path, *, enforce_must_touch: bool = F
 
     if enforce_must_touch and must_touch and not any(any(_path_matches_constraint(path, rule, worktree) for rule in must_touch) for path in touched):
         return (f"required target paths not touched yet: expected one of {', '.join(must_touch[:5])}", touched)
+
+    if enforce_must_touch and task_spec:
+        files_hint = _constraint_path_list(task_spec, "filesHint")
+        if files_hint and not any(
+            any(_path_matches_constraint(path, rule, worktree) for rule in files_hint)
+            for path in touched
+        ):
+            return (f"touched files do not overlap taskSpec filesHint: expected one of {', '.join(files_hint[:5])}", touched)
 
     return None
 

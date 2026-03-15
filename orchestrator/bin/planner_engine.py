@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import re
@@ -494,6 +495,16 @@ def _build_prompt(
     depends_on: list[str],
     phase_boundary: str,
 ) -> str:
+    task_spec = {
+        "repo": repo,
+        "subtaskId": subtask_id,
+        "subtaskTitle": subtask_title,
+        "filesHint": files_hint,
+        "allowedPaths": _constraint_path_list(constraints, "allowedPaths"),
+        "forbiddenPaths": _constraint_path_list(constraints, "forbiddenPaths", "blockedPaths"),
+        "mustTouch": _constraint_path_list(constraints, "mustTouch", "requiredTouchedPaths"),
+        "definitionOfDone": definition_of_done,
+    }
     lines = [
         "You are Zoe executing one subtask from a multi-step repository plan.",
         "",
@@ -557,6 +568,16 @@ def _build_prompt(
                 "- If your file plan does not include a required target path, stop and revise the plan before editing.",
             ]
         )
+    lines.extend(
+        [
+            "",
+            "TASK_SPEC (machine contract):",
+            "```json",
+            json.dumps(task_spec, ensure_ascii=False, indent=2),
+            "```",
+            "- Treat TASK_SPEC as the source of truth for scope. If your intended edits do not satisfy it, stop and fail instead of improvising.",
+        ]
+    )
     success_patterns = constraints.get("successPatterns") or []
     if success_patterns:
         lines.extend(["", "PAST SUCCESSES (approaches that worked before):"])
@@ -643,10 +664,19 @@ def _phase_files(
     objective: str,
     profile: TaskProfile,
     has_explicit_files_hint: bool,
+    constraints: Mapping[str, Any],
 ) -> dict[str, list[str]]:
     context_terms = _keyword_tokens(f"{title} {objective}")
     discovered = _discover_repo_phase_hints(repo)
-    if has_explicit_files_hint:
+    scope_locked = bool(
+        _constraint_path_list(constraints, "allowedPaths")
+        or _constraint_path_list(constraints, "mustTouch", "requiredTouchedPaths")
+    )
+    if scope_locked:
+        implementation_files = list(profile.implementation_files) or list(profile.files_hint)
+        test_files = list(profile.test_files) or implementation_files or list(profile.files_hint)
+        doc_files = list(profile.doc_files) or implementation_files or list(profile.files_hint)
+    elif has_explicit_files_hint:
         implementation_files = list(profile.implementation_files) or discovered["implementation"]
         test_files = list(profile.test_files) or discovered["tests"]
         doc_files = list(profile.doc_files) or discovered["docs"]
@@ -840,6 +870,7 @@ def _plan_code_change_tasks(
         objective=objective,
         profile=profile,
         has_explicit_files_hint=has_explicit_files_hint,
+        constraints=constraints,
     )
     impl_files = phase_files["implementation"] or list(profile.implementation_files) or list(profile.files_hint)
     foundation_files = phase_files["foundation"] or impl_files
