@@ -105,8 +105,26 @@ def _detect_default_branch(repo_root: Path) -> str:
     return "origin/main"
 
 
+def _detect_worktree_base_ref(repo_root: Path) -> str:
+    """Prefer the current local HEAD so isolated worktrees inherit the
+    exact checked-out repository content. Fall back to the remote default
+    branch only when HEAD cannot be resolved."""
+    head = sh(
+        ["git", "rev-parse", "--verify", "HEAD"],
+        cwd=repo_root,
+        check=False,
+    ).strip()
+    if head:
+        return head
+    return _detect_default_branch(repo_root)
+
+
 def create_worktree(repo_root: Path, branch: str) -> Path:
-    """Create a worktree based on the detected remote default branch."""
+    """Create a worktree based on the current local HEAD when available.
+
+    This avoids spawning scoped worktrees from a stale remote default branch
+    when the local checkout has moved ahead or differs intentionally.
+    """
     wt_base = worktrees_dir()
     wt_base.mkdir(parents=True, exist_ok=True)
 
@@ -117,8 +135,8 @@ def create_worktree(repo_root: Path, branch: str) -> Path:
 
     sh(["git", "fetch", "origin"], cwd=repo_root)
 
-    default_branch = _detect_default_branch(repo_root)
-    sh(["git", "worktree", "add", str(wt_dir), "-b", branch, default_branch], cwd=repo_root)
+    base_ref = _detect_worktree_base_ref(repo_root)
+    sh(["git", "worktree", "add", str(wt_dir), "-b", branch, base_ref], cwd=repo_root)
     return wt_dir
 
 

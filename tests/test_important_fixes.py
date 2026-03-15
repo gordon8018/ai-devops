@@ -73,11 +73,12 @@ class TestCmdListBareExcept(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# I9: create_worktree must detect the default branch dynamically
+# I9: create_worktree must base new worktrees on the local checkout HEAD
 # ---------------------------------------------------------------------------
 class TestCreateWorktreeDefaultBranch(unittest.TestCase):
-    """I9: create_worktree must not hardcode origin/main; it must detect
-    the remote default branch via git symbolic-ref."""
+    """I9: create_worktree must prefer the current local HEAD so spawned
+    worktrees inherit the actual checked-out repo content, not a stale remote
+    default branch."""
 
     def _load_daemon(self):
         daemon_file = BASE / "orchestrator" / "bin" / "zoe-daemon.py"
@@ -86,9 +87,9 @@ class TestCreateWorktreeDefaultBranch(unittest.TestCase):
         spec.loader.exec_module(mod)
         return mod
 
-    def test_create_worktree_uses_detected_default_branch(self):
-        """When origin HEAD points to develop, worktree must be based on
-        origin/develop, not origin/main."""
+    def test_create_worktree_uses_local_head_when_available(self):
+        """Worktree creation must use the current local HEAD when rev-parse
+        succeeds, even if origin HEAD points elsewhere."""
         daemon = self._load_daemon()
 
         with tempfile.TemporaryDirectory() as d:
@@ -101,27 +102,26 @@ class TestCreateWorktreeDefaultBranch(unittest.TestCase):
 
             def fake_sh(cmd, cwd=None, check=True):
                 sh_calls.append(cmd)
+                if cmd[:3] == ["git", "rev-parse", "--verify"]:
+                    return "abc123localhead"
                 if "symbolic-ref" in cmd:
-                    # git symbolic-ref --short returns "origin/develop" (not the full ref)
                     return "origin/develop"
                 return ""
 
             with patch.object(daemon, "sh", side_effect=fake_sh), \
                  patch.object(daemon, "worktrees_dir", return_value=wt_base):
-                # Make the worktree dir NOT exist so the real path runs
                 daemon.create_worktree(repo, "feat/my-task")
 
-            # git worktree add must reference origin/develop, not origin/main
             add_calls = [c for c in sh_calls if "worktree" in c and "add" in c]
             self.assertTrue(add_calls, "git worktree add not called")
             worktree_cmd = add_calls[0]
-            self.assertNotIn("origin/main", worktree_cmd,
-                             "create_worktree must not hardcode origin/main")
-            self.assertIn("origin/develop", worktree_cmd,
-                          "create_worktree must use the detected default branch")
+            self.assertIn("abc123localhead", worktree_cmd,
+                          "create_worktree must use the current local HEAD")
+            self.assertNotIn("origin/develop", worktree_cmd,
+                             "create_worktree should not prefer remote HEAD over local HEAD")
 
-    def test_create_worktree_falls_back_to_main_when_detection_fails(self):
-        """If git symbolic-ref fails (empty output), fall back to origin/main."""
+    def test_create_worktree_falls_back_to_detected_default_branch_when_head_missing(self):
+        """If local HEAD cannot be resolved, fall back to detected remote default branch."""
         daemon = self._load_daemon()
 
         with tempfile.TemporaryDirectory() as d:
@@ -131,8 +131,10 @@ class TestCreateWorktreeDefaultBranch(unittest.TestCase):
             repo.mkdir()
 
             def fake_sh(cmd, cwd=None, check=True):
+                if cmd[:3] == ["git", "rev-parse", "--verify"]:
+                    return ""
                 if "symbolic-ref" in cmd:
-                    return ""   # detection failure
+                    return "origin/develop"
                 return ""
 
             with patch.object(daemon, "sh", side_effect=fake_sh), \
