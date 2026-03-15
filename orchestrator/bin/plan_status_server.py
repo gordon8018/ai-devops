@@ -254,7 +254,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(html)
 
 
-def _find_free_port(start: int = 8700, retries: int = 10) -> int:
+def _find_free_port(start: int = 8700, retries: int = 50) -> int:
     for port in range(start, start + retries):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
