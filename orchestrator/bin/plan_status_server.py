@@ -1,6 +1,7 @@
 # orchestrator/bin/plan_status_server.py
 from __future__ import annotations
 
+import html as _html
 import json
 import socket
 import threading
@@ -54,7 +55,7 @@ _HTML_TEMPLATE = """\
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Plan: {plan_id}</title>
+<title>Plan: {plan_id_html}</title>
 <style>
   body {{ font-family: monospace; background: #0d1117; color: #c9d1d9; margin: 2em; }}
   h1 {{ color: #58a6ff; }}
@@ -80,7 +81,7 @@ _HTML_TEMPLATE = """\
 </style>
 </head>
 <body>
-<h1>🤖 Plan: <span id="plan-id">{plan_id}</span></h1>
+<h1>🤖 Plan: <span id="plan-id">{plan_id_html}</span></h1>
 <p>
   <span id="repo">—</span> &nbsp;|&nbsp;
   by <span id="requested-by">—</span> &nbsp;|&nbsp;
@@ -94,7 +95,7 @@ _HTML_TEMPLATE = """\
   <tbody id="task-body"></tbody>
 </table>
 <script>
-const PLAN_ID = "{plan_id}";
+const PLAN_ID = {plan_id_js};
 const INTERVAL = 5;
 let countdown = INTERVAL;
 
@@ -244,7 +245,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _serve_html(self) -> None:
-        html = _HTML_TEMPLATE.format(plan_id=self.plan_id).encode()
+        safe_html = _html.escape(self.plan_id)
+        safe_js = json.dumps(self.plan_id)
+        html = _HTML_TEMPLATE.format(plan_id_html=safe_html, plan_id_js=safe_js).encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()

@@ -86,18 +86,20 @@ def load_plan_view(plan_id: str, base_dir: Path | None = None) -> PlanView:
     if db_path.exists():
         conn = _sqlite3.connect(str(db_path))
         conn.row_factory = _sqlite3.Row
-        cursor = conn.execute(
-            "SELECT * FROM agent_tasks WHERE plan_id = ? ORDER BY id",
-            (plan_id,),
-        )
-        for row in cursor.fetchall():
-            row_dict = dict(row)
-            # DB id format: "<plan_id>-<subtask_id>" — extract subtask_id suffix
-            raw_id = row_dict["id"]
-            prefix = f"{plan_id}-"
-            subtask_id = raw_id[len(prefix):] if raw_id.startswith(prefix) else raw_id
-            db_tasks[subtask_id] = row_dict
-        conn.close()
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM agent_tasks WHERE plan_id = ? ORDER BY id",
+                (plan_id,),
+            )
+            for row in cursor.fetchall():
+                row_dict = dict(row)
+                # DB id format: "<plan_id>-<subtask_id>" — extract subtask_id suffix
+                raw_id = row_dict["id"]
+                prefix = f"{plan_id}-"
+                subtask_id = raw_id[len(prefix):] if raw_id.startswith(prefix) else raw_id
+                db_tasks[subtask_id] = row_dict
+        finally:
+            conn.close()
 
     # --- merge: archive defines structure, DB provides live status ---
     subtask_views: list[SubtaskView] = []

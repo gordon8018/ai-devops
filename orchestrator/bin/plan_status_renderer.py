@@ -117,7 +117,7 @@ def render_plan_view(pv: PlanView) -> str:
     lines.append("")
 
     dag = build_dag_lines(pv)
-    if dag:
+    if dag and any(line.strip() for line in dag):
         lines.append("Dependency Graph:")
         lines.extend(f"  {l}" for l in dag)
         lines.append("")
