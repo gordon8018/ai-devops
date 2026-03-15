@@ -133,6 +133,48 @@ def test_analysis_task_discovers_repo_entry_files_when_no_files_hint(tmp_path, m
     assert "src/main.ts" in plan.subtasks[0].files_hint
 
 
+def test_constraint_paths_override_repo_discovery_and_harden_prompt(tmp_path, monkeypatch) -> None:
+    base = tmp_path / "ai-devops"
+    repo_root = base / "repos" / "demo-repo"
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "skills" / "sonos-pure-play" / "scripts").mkdir(parents=True)
+    (repo_root / "src" / "background.js").write_text("console.log('bg')\n", encoding="utf-8")
+    (repo_root / "skills" / "sonos-pure-play" / "scripts" / "query-planner.mjs").write_text("export const qp = {};\n", encoding="utf-8")
+    (repo_root / "skills" / "sonos-pure-play" / "scripts" / "web-flow.mjs").write_text("export const wf = {};\n", encoding="utf-8")
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(base))
+
+    plan = ZoePlannerEngine().plan(
+        {
+            "planId": "1730000000000-demo-repo-sonos-fix",
+            "repo": "demo-repo",
+            "title": "Strict Sonos skill update",
+            "requestedBy": "alice#1234",
+            "requestedAt": 1730000000000,
+            "objective": "Update only the Sonos skill implementation.",
+            "constraints": {
+                "allowedPaths": [str(repo_root / "skills" / "sonos-pure-play" / "**")],
+                "forbiddenPaths": ["src/**"],
+                "mustTouch": [str(repo_root / "skills" / "sonos-pure-play" / "scripts" / "query-planner.mjs")],
+            },
+            "context": {},
+            "routing": {
+                "agent": "codex",
+                "model": "gpt-5.3-codex",
+                "effort": "medium",
+            },
+            "version": "1.0",
+        }
+    )
+
+    first_files = set(plan.subtasks[0].files_hint)
+    assert "skills/sonos-pure-play" in next(iter(first_files))
+    assert all(not item.startswith("src/") for item in first_files)
+    assert "ALLOWED PATHS (hard boundary):" in plan.subtasks[0].prompt
+    assert "FORBIDDEN PATHS (hard boundary):" in plan.subtasks[0].prompt
+    assert "REQUIRED TARGET FILES / PATHS:" in plan.subtasks[0].prompt
+    assert "FIRST STEP FILE PLAN:" in plan.subtasks[0].prompt
+
+
 def test_code_task_discovers_implementation_and_test_files_when_no_files_hint(tmp_path, monkeypatch) -> None:
     base = tmp_path / "ai-devops"
     repo_root = base / "repos" / "demo-repo"

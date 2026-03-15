@@ -272,6 +272,50 @@ def _repo_root(repo: str) -> Path:
     return base_dir / "repos" / repo
 
 
+def _constraint_path_list(constraints: Mapping[str, Any], *keys: str) -> list[str]:
+    values: list[str] = []
+    for key in keys:
+        raw = constraints.get(key)
+        if not isinstance(raw, list):
+            continue
+        for item in raw:
+            text = str(item).strip()
+            if text:
+                values.append(text)
+    return _dedupe(values)
+
+
+def _repo_relative_constraint_path(path: str, repo_root: Path) -> str | None:
+    text = path.strip()
+    if not text:
+        return None
+    if any(ch in text for ch in "*?["):
+        text = text.split("*", 1)[0].rstrip("/")
+    candidate = Path(text)
+    try:
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+            repo_resolved = repo_root.resolve()
+            try:
+                rel = resolved.relative_to(repo_resolved)
+                return str(rel) if str(rel) != "." else None
+            except ValueError:
+                return None
+        return text.lstrip("./") or None
+    except OSError:
+        return None
+
+
+def _constraint_file_hints(repo: str, constraints: Mapping[str, Any]) -> list[str]:
+    repo_root = _repo_root(repo)
+    hints: list[str] = []
+    for item in _constraint_path_list(constraints, "mustTouch", "requiredTouchedPaths", "allowedPaths"):
+        rel = _repo_relative_constraint_path(item, repo_root)
+        if rel:
+            hints.append(rel)
+    return _dedupe(hints)
+
+
 def _priority_score(path: str) -> int:
     lowered = path.lower()
     score = 0
@@ -485,9 +529,34 @@ def _build_prompt(
     )
     if constraints:
         lines.append("- Respect the explicit constraints attached to this plan.")
+        allowed_paths = _constraint_path_list(constraints, "allowedPaths")
+        forbidden_paths = _constraint_path_list(constraints, "forbiddenPaths", "blockedPaths")
+        must_touch = _constraint_path_list(constraints, "mustTouch", "requiredTouchedPaths")
+        if allowed_paths:
+            lines.extend(["", "ALLOWED PATHS (hard boundary):"])
+            lines.extend(f"- {item}" for item in allowed_paths)
+            lines.append("- Do not modify files outside the allowed paths.")
+        if forbidden_paths:
+            lines.extend(["", "FORBIDDEN PATHS (hard boundary):"])
+            lines.extend(f"- {item}" for item in forbidden_paths)
+            lines.append("- Touching any forbidden path means the task failed.")
+        if must_touch:
+            lines.extend(["", "REQUIRED TARGET FILES / PATHS:"])
+            lines.extend(f"- {item}" for item in must_touch)
+            lines.append("- If you do not touch at least one required target path, the task is not complete.")
     if files_hint:
         lines.extend(["", "FILES TO CHECK FIRST:"])
         lines.extend(f"- {item}" for item in files_hint)
+    if constraints and (_constraint_path_list(constraints, "allowedPaths") or _constraint_path_list(constraints, "mustTouch", "requiredTouchedPaths")):
+        lines.extend(
+            [
+                "",
+                "FIRST STEP FILE PLAN:",
+                "- Before editing, list the exact files you will modify.",
+                "- If any planned file falls outside the allowed paths, stop and fail instead of proceeding.",
+                "- If your file plan does not include a required target path, stop and revise the plan before editing.",
+            ]
+        )
     success_patterns = constraints.get("successPatterns") or []
     if success_patterns:
         lines.extend(["", "PAST SUCCESSES (approaches that worked before):"])
@@ -967,8 +1036,9 @@ class ZoePlannerEngine:
         explicit_files_hint = _dedupe(
             [str(item).strip() for item in explicit_files_hint if str(item).strip()]
         )
-        has_explicit_files_hint = bool(explicit_files_hint)
-        files_hint = explicit_files_hint or _discover_repo_file_hints(repo)
+        constrained_files_hint = _constraint_file_hints(repo, constraints)
+        has_explicit_files_hint = bool(explicit_files_hint or constrained_files_hint)
+        files_hint = explicit_files_hint or constrained_files_hint or _discover_repo_file_hints(repo)
 
         agent = _coerce_text(routing.get("agent") or "codex")
         model = _coerce_text(routing.get("model") or "gpt-5.3-codex")

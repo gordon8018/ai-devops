@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import fnmatch
 import json
 import os
 import sys as _sys
@@ -76,6 +77,104 @@ def _obsidian_search(query: str) -> list[dict]:
         return []
     client = ObsidianClient.from_env()
     return client.search(query, limit=2)
+
+
+def _constraint_path_list(raw: dict | None, *keys: str) -> list[str]:
+    if not isinstance(raw, dict):
+        return []
+    values: list[str] = []
+    for key in keys:
+        items = raw.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            text = str(item).strip()
+            if text:
+                values.append(text)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
+def _git_touched_files(worktree: Path) -> list[str]:
+    if not worktree.exists():
+        return []
+    output = sh(["git", "status", "--short"], cwd=worktree)
+    if not output:
+        return []
+    touched: list[str] = []
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        path = line[3:].strip() if len(line) >= 4 else line.strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1].strip()
+        if path:
+            touched.append(path)
+    return touched
+
+
+def _path_matches_constraint(path: str, rule: str, worktree: Path) -> bool:
+    normalized = path.replace('\\', '/').lstrip('./')
+    candidate_paths = {normalized}
+    try:
+        abs_path = (worktree / normalized).resolve()
+        candidate_paths.add(str(abs_path).replace('\\', '/'))
+    except OSError:
+        pass
+
+    normalized_rule = rule.replace('\\', '/').rstrip('/')
+    if not normalized_rule:
+        return False
+    if any(ch in normalized_rule for ch in '*?['):
+        patterns = {normalized_rule}
+        if normalized_rule.endswith('/**'):
+            patterns.add(normalized_rule[:-3])
+            patterns.add(normalized_rule[:-3] + '/*')
+        return any(any(fnmatch.fnmatch(candidate, pat) for pat in patterns) for candidate in candidate_paths)
+
+    return any(
+        candidate == normalized_rule
+        or candidate.startswith(normalized_rule + '/')
+        for candidate in candidate_paths
+    )
+
+
+def _scope_violation(task: dict, worktree: Path, *, enforce_must_touch: bool = False) -> tuple[str, list[str]] | None:
+    metadata = task.get("metadata")
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except Exception:
+            metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    constraints = metadata.get("constraints") if isinstance(metadata.get("constraints"), dict) else {}
+    allowed = _constraint_path_list(constraints, "allowedPaths")
+    forbidden = _constraint_path_list(constraints, "forbiddenPaths", "blockedPaths")
+    must_touch = _constraint_path_list(constraints, "mustTouch", "requiredTouchedPaths")
+    touched = _git_touched_files(worktree)
+    if not touched:
+        return None
+
+    forbidden_hits = [path for path in touched if any(_path_matches_constraint(path, rule, worktree) for rule in forbidden)]
+    if forbidden_hits:
+        return (f"forbidden paths touched: {', '.join(forbidden_hits[:5])}", touched)
+
+    if allowed:
+        outside = [path for path in touched if not any(_path_matches_constraint(path, rule, worktree) for rule in allowed)]
+        if outside:
+            return (f"touched files outside allowed paths: {', '.join(outside[:5])}", touched)
+
+    if enforce_must_touch and must_touch and not any(any(_path_matches_constraint(path, rule, worktree) for rule in must_touch) for path in touched):
+        return (f"required target paths not touched yet: expected one of {', '.join(must_touch[:5])}", touched)
+
+    return None
 
 
 def _write_failure_log(repo: str, task_id: str, fail_summary: str, ci_detail: str) -> None:
@@ -209,6 +308,17 @@ def _process_task(t: dict, notified_ready: set) -> None:
     else:
         alive = bool(session) and tmux_alive(session)
 
+    scope_violation = _scope_violation(t, worktree, enforce_must_touch=False)
+    if scope_violation:
+        note, touched = scope_violation
+        update_task(task_id, {"status": "blocked", "note": note})
+        t["status"] = "blocked"
+        notify(
+            f"🛑 Scope violation: `{task_id}` touched wrong files. {note}\n"
+            f"Touched: {', '.join(touched[:8])}"
+        )
+        return
+
     # 1) PR info
     pr = pr_info(worktree, branch)
 
@@ -234,7 +344,20 @@ def _process_task(t: dict, notified_ready: set) -> None:
             if exit_info:
                 exit_code = exit_info.get("exitCode")
                 completed_at = exit_info.get("finishedAt")
-                if exit_code == 0:
+                terminal_scope_violation = _scope_violation(t, worktree, enforce_must_touch=True)
+                if terminal_scope_violation:
+                    note, touched = terminal_scope_violation
+                    update_task(task_id, {
+                        "status": "blocked",
+                        "completed_at": completed_at,
+                        "note": note,
+                    })
+                    t["status"] = "blocked"
+                    notify(
+                        f"🛑 Scope violation after agent exit: `{task_id}`. {note}\n"
+                        f"Touched: {', '.join(touched[:8])}"
+                    )
+                elif exit_code == 0:
                     update_task(task_id, {
                         "status": "agent_exited",
                         "completed_at": completed_at,
@@ -279,6 +402,20 @@ def _process_task(t: dict, notified_ready: set) -> None:
 
     # 就绪条件：检查通过且可干净合并
     if passed and merge_clean(pr):
+        terminal_scope_violation = _scope_violation(t, worktree, enforce_must_touch=True)
+        if terminal_scope_violation:
+            note, touched = terminal_scope_violation
+            update_task(task_id, {
+                "status": "blocked",
+                "completed_at": int(time.time() * 1000),
+                "note": note,
+            })
+            t["status"] = "blocked"
+            notify(
+                f"🛑 Scope violation before ready: `{task_id}`. {note}\n"
+                f"Touched: {', '.join(touched[:8])}"
+            )
+            return
         if task_id not in notified_ready:
             notified_ready.add(task_id)
             update_task(task_id, {

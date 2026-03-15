@@ -212,6 +212,26 @@ class TestMonitorTaskChecking(unittest.TestCase):
         updated_task = get_task("test-task-dead")
         self.assertEqual(updated_task["status"], "agent_dead")
 
+    @patch("monitor.tmux_alive", return_value=True)
+    @patch("monitor.pr_info", return_value=None)
+    @patch("monitor.sh", return_value=" M src/background.js")
+    def test_task_blocked_when_touched_file_violates_scope(self, mock_sh, mock_pr, mock_tmux):
+        task = make_task(
+            id="test-task-scope",
+            worktree=str(self.worktree),
+            metadata={
+                "constraints": {
+                    "allowedPaths": [str(self.worktree / "skills" / "sonos-pure-play" / "**")],
+                    "forbiddenPaths": ["src/**"],
+                }
+            },
+        )
+        insert_task(task)
+        changed, notified = check_all_tasks(set())
+        updated_task = get_task("test-task-scope")
+        self.assertEqual(updated_task["status"], "blocked")
+        self.assertIn("forbidden paths touched", updated_task["note"])
+
 
 class TestMonitorIntegration(unittest.TestCase):
     """Integration-style monitor tests (TestCase style)."""
