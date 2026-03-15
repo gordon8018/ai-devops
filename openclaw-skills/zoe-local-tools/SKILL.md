@@ -6,8 +6,6 @@ metadata: {"openclaw":{"emoji":"🛠️","os":["linux"],"requires":{"bins":["pyt
 
 # Zoe Local Tools
 
-Use this skill when the user asks you to do one of these things in the local `ai-devops` system.
-
 ## Important local-install note
 
 This skill file living inside the repository does **not** mean OpenClaw will automatically discover and use it on another machine.
@@ -34,6 +32,7 @@ Prefer these tools over manually reading `tasks/`, `orchestrator/queue/`, or `.c
 Use the helper script in this skill:
 
 ```bash
+{baseDir}/scripts/invoke_zoe_tool.sh doctor
 {baseDir}/scripts/invoke_zoe_tool.sh schema
 {baseDir}/scripts/invoke_zoe_tool.sh call <tool-name> --args-file /tmp/zoe-tool-args.json
 ```
