@@ -64,6 +64,17 @@ export AI_DEVOPS_HOME="$(pwd)"
 
 如果不设置，默认基础目录仍然是 `~/ai-devops`。
 
+### 使用仓库内附带的 OpenClaw Skill
+
+仓库里虽然带有 `openclaw-skills/zoe-local-tools/`，但**仅仅 clone 仓库并不代表 OpenClaw 会自动发现并启用它**。
+如果要在真实 OpenClaw 环境中使用，请把这个 skill 复制或安装到以下发现路径之一：
+
+- `<workspace>/skills/zoe-local-tools/`
+- `~/.openclaw/skills/zoe-local-tools/`
+
+如果你仍然直接使用仓库里的 helper script，请先设置 `AI_DEVOPS_HOME`，让脚本能够解析当前机器上的真实 checkout 路径。
+不要假设所有机器都有 `/home/user01/ai-devops` 这个固定路径。
+
 ### 环境变量
 
 ```bash

@@ -184,6 +184,17 @@ export AI_DEVOPS_HOME="$(pwd)"
 
 If unset, the default base directory remains `~/ai-devops`.
 
+### Using the bundled OpenClaw skill
+
+This repository includes an OpenClaw skill at `openclaw-skills/zoe-local-tools/`, but that repo-local copy is **not** automatically active just because the repository was cloned.
+For a real OpenClaw installation, copy or install the skill into one of these discovery paths:
+
+- `<workspace>/skills/zoe-local-tools/`
+- `~/.openclaw/skills/zoe-local-tools/`
+
+If you keep using the repo-local helper script directly, set `AI_DEVOPS_HOME` first so the script resolves the correct checkout path on that machine.
+Do not assume a fixed path like `/home/user01/ai-devops` exists everywhere.
+
 ### Environment Setup
 
 ```bash

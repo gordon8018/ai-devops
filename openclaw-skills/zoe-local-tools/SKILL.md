@@ -6,6 +6,19 @@ metadata: {"openclaw":{"emoji":"🛠️","os":["linux"],"requires":{"bins":["pyt
 
 # Zoe Local Tools
 
+Use this skill when the user asks you to do one of these things in the local `ai-devops` system.
+
+## Important local-install note
+
+This skill file living inside the repository does **not** mean OpenClaw will automatically discover and use it on another machine.
+To make it usable in a real OpenClaw workspace, install or copy this skill into one of these locations:
+
+- `<workspace>/skills/zoe-local-tools/`
+- `~/.openclaw/skills/zoe-local-tools/`
+
+If you keep using the repo-local copy, make sure the helper script can resolve the real repository path via `AI_DEVOPS_HOME`.
+Do not assume `/home/user01/ai-devops` exists.
+
 Use this skill when the user asks you to do one of these things in the local `ai-devops` system:
 
 - plan a high-level engineering task
@@ -25,7 +38,8 @@ Use the helper script in this skill:
 {baseDir}/scripts/invoke_zoe_tool.sh call <tool-name> --args-file /tmp/zoe-tool-args.json
 ```
 
-The helper script calls the local Zoe JSON tool adapter in `/home/user01/ai-devops` and returns structured JSON.
+The helper script calls the local Zoe JSON tool adapter and returns structured JSON.
+Before using it, ensure `AI_DEVOPS_HOME` points at the actual checkout path for this machine, or install a managed override of this skill whose script hardcodes the local path.
 Prefer `--args-file` for any non-trivial payload so shell quoting does not corrupt JSON.
 
 ## Recommended Workflow
