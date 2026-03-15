@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import time
+import subprocess
 from typing import Any
 
 try:
@@ -52,6 +53,33 @@ def dispatch_state_path(plan: Plan, base_dir: Path | None = None) -> Path:
 
 def execution_task_id(plan: Plan, subtask: Subtask) -> str:
     return sanitize_identifier(f"{plan.plan_id}-{subtask.id}")
+
+
+def _daemon_running() -> bool:
+    proc = subprocess.run(
+        ["pgrep", "-f", "orchestrator/bin/zoe-daemon.py"],
+        capture_output=True,
+        text=True,
+    )
+    return proc.returncode == 0
+
+
+def _repo_checkout_exists(repo: str, base_dir: Path) -> bool:
+    target = base_dir / "repos" / repo
+    return (target / ".git").is_dir() or (target / ".git").is_file()
+
+
+def preflight_dispatch(plan: Plan, base_dir: Path) -> None:
+    if not _daemon_running():
+        raise DispatchError(
+            "Cannot dispatch plan: zoe-daemon.py is not running. "
+            "Start the local worker before using plan_and_dispatch_task or dispatch_plan."
+        )
+    if not _repo_checkout_exists(plan.repo, base_dir):
+        raise DispatchError(
+            f"Cannot dispatch plan: repo checkout not found at {base_dir / 'repos' / plan.repo}. "
+            "Clone or link the repo there first."
+        )
 
 
 def load_dispatch_state(plan: Plan, base_dir: Path | None = None) -> dict[str, Any]:
@@ -274,6 +302,7 @@ def dispatch_plan_file(
     plan = load_plan(plan_file)
     root = base_dir or default_base_dir()
     _validate_plan_id_collision(plan, root)
+    preflight_dispatch(plan, root)
     archive_subtasks(plan, root)
     if watch:
         return watch_and_dispatch(plan, base_dir=root, poll_interval_sec=poll_interval_sec)
