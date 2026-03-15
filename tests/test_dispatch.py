@@ -204,6 +204,8 @@ class TestBuildExecutionTask(unittest.TestCase):
         self.assertEqual(result["repo"], "test/repo")
         self.assertEqual(result["metadata"]["planId"], "test-plan")
         self.assertEqual(result["metadata"]["plannedBy"], "zoe")
+        self.assertIn("taskSpec", result["metadata"])
+        self.assertEqual(result["metadata"]["taskSpec"]["filesHint"], ["src/main.py"])
 
 
 class TestArchiveSubtasks(unittest.TestCase):
@@ -276,6 +278,28 @@ class TestDispatchReadySubtasks(unittest.TestCase):
         queued2 = dispatch_ready_subtasks(self.plan, base_dir=self.base, registry_items=registry)
         self.assertEqual(len(queued2), 1)
         self.assertIn("test-plan-S2", str(queued2[0]))
+
+    def test_dispatch_ready_subtasks_rejects_scoped_files_hint_outside_allowed_paths(self):
+        scoped_plan = make_plan(
+            repo="demo-repo",
+            constraints={
+                "allowedPaths": [str(self.base / "repos" / "demo-repo" / "skills" / "sonos-pure-play" / "**")],
+                "mustTouch": [str(self.base / "repos" / "demo-repo" / "skills" / "sonos-pure-play" / "scripts" / "query-planner.mjs")],
+            },
+            subtasks=[
+                {
+                    "id": "S1",
+                    "title": "Scoped",
+                    "description": "Test",
+                    "dependsOn": [],
+                    "filesHint": ["docs/unrelated.md"],
+                }
+            ],
+        )
+        archive_subtasks(scoped_plan, self.base)
+
+        with self.assertRaises(DispatchError):
+            dispatch_ready_subtasks(scoped_plan, base_dir=self.base, registry_items=[])
 
 
 class TestDispatchPlanFileHardening(unittest.TestCase):

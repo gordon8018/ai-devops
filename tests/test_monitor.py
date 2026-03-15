@@ -232,6 +232,52 @@ class TestMonitorTaskChecking(unittest.TestCase):
         self.assertEqual(updated_task["status"], "blocked")
         self.assertIn("forbidden paths touched", updated_task["note"])
 
+    @patch("monitor.tmux_alive", return_value=False)
+    @patch("monitor.pr_info", return_value=None)
+    @patch("monitor.load_exit_status", return_value={"exitCode": 0, "finishedAt": 1234567890})
+    @patch("monitor.sh", return_value="")
+    def test_task_blocked_when_scoped_agent_exits_without_edits(self, mock_sh, mock_exit, mock_pr, mock_tmux):
+        task = make_task(
+            id="test-task-no-edits",
+            worktree=str(self.worktree),
+            metadata={
+                "constraints": {
+                    "allowedPaths": [str(self.worktree / "skills" / "sonos-pure-play" / "**")],
+                    "mustTouch": [str(self.worktree / "skills" / "sonos-pure-play" / "scripts" / "query-planner.mjs")],
+                },
+                "taskSpec": {
+                    "filesHint": ["skills/sonos-pure-play/scripts/query-planner.mjs"],
+                    "allowedPaths": [str(self.worktree / "skills" / "sonos-pure-play" / "**")],
+                    "mustTouch": [str(self.worktree / "skills" / "sonos-pure-play" / "scripts" / "query-planner.mjs")],
+                },
+            },
+        )
+        insert_task(task)
+        check_all_tasks(set())
+        updated_task = get_task("test-task-no-edits")
+        self.assertEqual(updated_task["status"], "blocked")
+        self.assertIn("no scoped repository edits detected", updated_task["note"])
+
+    @patch("monitor.tmux_alive", return_value=False)
+    @patch("monitor.pr_info", return_value=None)
+    @patch("monitor.load_exit_status", return_value={"exitCode": 0, "finishedAt": 1234567890})
+    @patch("monitor.sh", return_value=" M skills/sonos-pure-play/scripts/other-file.mjs")
+    def test_task_blocked_when_touches_do_not_overlap_task_spec_files(self, mock_sh, mock_exit, mock_pr, mock_tmux):
+        task = make_task(
+            id="test-task-task-spec",
+            worktree=str(self.worktree),
+            metadata={
+                "taskSpec": {
+                    "filesHint": ["skills/sonos-pure-play/scripts/query-planner.mjs"],
+                },
+            },
+        )
+        insert_task(task)
+        check_all_tasks(set())
+        updated_task = get_task("test-task-task-spec")
+        self.assertEqual(updated_task["status"], "blocked")
+        self.assertIn("taskSpec filesHint", updated_task["note"])
+
 
 class TestMonitorIntegration(unittest.TestCase):
     """Integration-style monitor tests (TestCase style)."""

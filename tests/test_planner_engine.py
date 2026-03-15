@@ -173,6 +173,50 @@ def test_constraint_paths_override_repo_discovery_and_harden_prompt(tmp_path, mo
     assert "FORBIDDEN PATHS (hard boundary):" in plan.subtasks[0].prompt
     assert "REQUIRED TARGET FILES / PATHS:" in plan.subtasks[0].prompt
     assert "FIRST STEP FILE PLAN:" in plan.subtasks[0].prompt
+    assert "TASK_SPEC (machine contract):" in plan.subtasks[0].prompt
+
+
+def test_constraint_scoped_task_keeps_validation_and_docs_inside_scope(tmp_path, monkeypatch) -> None:
+    base = tmp_path / "ai-devops"
+    repo_root = base / "repos" / "demo-repo"
+    (repo_root / "skills" / "sonos-pure-play" / "scripts").mkdir(parents=True)
+    (repo_root / "tests").mkdir(parents=True)
+    (repo_root / "docs").mkdir(parents=True)
+    (repo_root / "skills" / "sonos-pure-play" / "scripts" / "query-planner.mjs").write_text("export const qp = {};\n", encoding="utf-8")
+    (repo_root / "skills" / "sonos-pure-play" / "scripts" / "executor.mjs").write_text("export const ex = {};\n", encoding="utf-8")
+    (repo_root / "tests" / "test_unrelated.py").write_text("def test_unrelated():\n    pass\n", encoding="utf-8")
+    (repo_root / "docs" / "unrelated.md").write_text("# unrelated\n", encoding="utf-8")
+    monkeypatch.setenv("AI_DEVOPS_HOME", str(base))
+
+    plan = ZoePlannerEngine().plan(
+        {
+            "planId": "1730000000000-demo-repo-sonos-repair",
+            "repo": "demo-repo",
+            "title": "Repair Sonos task scope drift and update documentation",
+            "requestedBy": "alice#1234",
+            "requestedAt": 1730000000000,
+            "objective": "Implement the Sonos repair, add validation, and update documentation without leaving the skill scope.",
+            "constraints": {
+                "allowedPaths": [str(repo_root / "skills" / "sonos-pure-play" / "**")],
+                "mustTouch": [str(repo_root / "skills" / "sonos-pure-play" / "scripts" / "query-planner.mjs")],
+            },
+            "context": {},
+            "routing": {
+                "agent": "codex",
+                "model": "gpt-5.3-codex",
+                "effort": "medium",
+            },
+            "version": "1.0",
+        }
+    )
+
+    assert len(plan.subtasks) >= 3
+    assert plan.subtasks[-1].title == "Update documentation and handoff notes"
+    for subtask in plan.subtasks:
+        assert subtask.files_hint
+        assert all(path.startswith("skills/sonos-pure-play") for path in subtask.files_hint)
+        assert "tests/test_unrelated.py" not in subtask.files_hint
+        assert "docs/unrelated.md" not in subtask.files_hint
 
 
 def test_code_task_discovers_implementation_and_test_files_when_no_files_hint(tmp_path, monkeypatch) -> None:
