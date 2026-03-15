@@ -365,7 +365,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "orchestrator" / "bin"))
 
 from plan_status import PlanView, SubtaskView
-from plan_status_renderer import status_icon, build_dag_lines, render_plan_view
+from plan_status_renderer import status_icon, build_dag_lines, render_plan_view, watch_plan
 
 def test_status_icon_known():
     assert "✅" in status_icon("ready")
