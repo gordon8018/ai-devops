@@ -195,6 +195,17 @@ For a real OpenClaw installation, copy or install the skill into one of these di
 If you keep using the repo-local helper script directly, set `AI_DEVOPS_HOME` first so the script resolves the correct checkout path on that machine.
 Do not assume a fixed path like `/home/user01/ai-devops` exists everywhere.
 
+Before asking an agent to dispatch coding work, run this preflight:
+
+```bash
+openclaw-skills/zoe-local-tools/scripts/invoke_zoe_tool.sh doctor
+```
+
+A healthy dispatch path needs all three:
+- `zoe-daemon.py` running (otherwise tasks sit in queue and never start)
+- the target repo present under `$AI_DEVOPS_HOME/repos/<owner>/<repo>` or linked there
+- `monitor.py` running if you expect automatic PR/CI progress tracking and completion feedback
+
 ### Environment Setup
 
 ```bash

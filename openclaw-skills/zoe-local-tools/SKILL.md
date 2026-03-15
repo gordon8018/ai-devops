@@ -44,13 +44,19 @@ Prefer `--args-file` for any non-trivial payload so shell quoting does not corru
 
 ## Recommended Workflow
 
-1. If you have not used these tools in the current session, inspect the schema first:
+1. If you have not used these tools in the current session, run the health preflight first:
 
 ```bash
+{baseDir}/scripts/invoke_zoe_tool.sh doctor
 {baseDir}/scripts/invoke_zoe_tool.sh schema
 ```
 
-2. Choose the right tool:
+2. Before `plan_and_dispatch_task`, verify these conditions:
+- `zoe-daemon.py` is running, otherwise tasks will queue but never start
+- the target repository exists under `$AI_DEVOPS_HOME/repos/<owner>/<repo>` (or is linked there)
+- `monitor.py` is running if the user expects PR/CI progress tracking and completion updates
+
+3. Choose the right tool:
 
 - `plan_task`: generate a validated plan only
 - `plan_and_dispatch_task`: generate a plan and queue the first runnable subtasks
@@ -59,7 +65,7 @@ Prefer `--args-file` for any non-trivial payload so shell quoting does not corru
 - `list_plans`: list recent archived plans
 - `retry_task`: manually retry a failed or blocked task by task_id
 
-3. For planning requests, send a complete payload. Minimum useful fields:
+4. For planning requests, send a complete payload. Minimum useful fields:
 
 ```json
 {
@@ -86,7 +92,7 @@ JSON
 {baseDir}/scripts/invoke_zoe_tool.sh call plan_and_dispatch_task --args-file /tmp/zoe-tool-args.json
 ```
 
-4. For status requests:
+5. For status requests:
 
 - single task:
 
@@ -115,7 +121,7 @@ JSON
 {baseDir}/scripts/invoke_zoe_tool.sh call list_plans --args-file /tmp/zoe-tool-args.json
 ```
 
-5. To retry a failed or blocked task:
+6. To retry a failed or blocked task:
 
 ```bash
 cat >/tmp/zoe-tool-args.json <<'JSON'
