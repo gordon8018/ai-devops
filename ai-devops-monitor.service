@@ -1,0 +1,19 @@
+[Unit]
+Description=AI DevOps Monitor
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/user01/ai-devops/orchestrator/bin/monitor.py --once
+WorkingDirectory=/home/user01/ai-devops
+Environment=AI_DEVOPS_HOME=/home/user01/ai-devops
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+StandardOutput=append:/home/user01/ai-devops/logs/monitor-stdout.log
+StandardError=append:/home/user01/ai-devops/logs/monitor-stderr.log
+
+# Restart on failure
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target

@@ -16,6 +16,12 @@ except ImportError:
     from config import agents_dir, logs_dir
 
 
+try:
+    from .tmux_manager import TmuxManager
+except ImportError:
+    from tmux_manager import TmuxManager
+
+
 def runner_codex() -> str:
     return str(Path(os.getenv("CODEX_RUNNER_PATH", str(agents_dir() / "run-codex-agent.sh"))))
 
@@ -216,4 +222,40 @@ def restart_agent(task: dict, worktree: Path, prompt_filename: str) -> None:
     task["processId"] = process.pid
     task["tmuxSession"] = None
 
+
+def tmux_session_health_check(session_name: str, worktree: Path) -> dict:
+    """使用 TmuxManager 检查会话健康状态"""
+    runner = str(worktree / "dummy")  # dummy runner, will be replaced
+    manager = TmuxManager(session_name, worktree, runner)
+    info = manager.get_session_info()
+    if info is None:
+        return {"healthy": False, "reason": "tmux unavailable or session not exist"}
+    return {"healthy": info["is_healthy"], "session": info}
+
+
+def tmux_session_rebuild(task: dict, worktree: Path, prompt_filename: str) -> Tuple[bool, str]:
+    """使用 TmuxManager 重建 tmux 会话"""
+    session_name = task.get("tmuxSession") or task.get("tmux_session")
+    agent = task.get("agent", "codex")
+    task_id = task.get("id")
+    model = task.get("model")
+    effort = task.get("effort", "high")
+    
+    runner = runner_codex() if agent == "codex" else runner_claude()
+    manager = TmuxManager(session_name, worktree, runner)
+    return manager.safe_rebuild(agent, task_id, model, effort, prompt_filename)
+
+
+def tmux_list_sessions() -> list[str]:
+    """列出所有 tmux 会话"""
+    if not tmux_available():
+        return []
+    try:
+        from .tmux_manager import TmuxManager
+    except ImportError:
+        from tmux_manager import TmuxManager
+    # 使用一个假的工作目录创建管理器
+    from pathlib import Path
+    manager = TmuxManager("_dummy_", Path("."), "dummy")
+    return manager.list_sessions()
 

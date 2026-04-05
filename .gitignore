@@ -23,3 +23,18 @@ Thumbs.db
 logs/
 orchestrator/queue/*.json
 .worktrees/
+
+# Test and coverage artifacts
+.coverage
+coverage.json
+*.egg-info/
+
+# Backup files
+*.bak
+*.bak.*
+
+# Build artifacts
+agent
+
+# Verification scripts
+verify_*.py

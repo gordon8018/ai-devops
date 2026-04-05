@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Label for launchctl -->
+    <key>Label</key>
+    <string>com.ai-devops.webhook</string>
+    
+    <!-- Program to run -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/gordon/ai-devops/orchestrator/bin/webhook_server.py</string>
+        <key>--port</key>
+        <string>8080</string>
+        <key>--daemon</key>
+    </array>
+    
+    <!-- Run at load time and keep alive -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>/Users/gordon/ai-devops</string>
+    
+    <!-- Environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>AI_DEVOPS_HOME</key>
+        <string>/Users/gordon/ai-devops</string>
+        <key>GITHUB_WEBHOOK_SECRET</key>
+        <string>CHANGE_ME_SECRET_KEY</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    
+    <!-- Standard output log -->
+    <key>StandardOutPath</key>
+    <string>/Users/gordon/ai-devops/logs/webhook-stdout.log</string>
+    
+    <!-- Standard error log -->
+    <key>StandardErrorPath</key>
+    <string>/Users/gordon/ai-devops/logs/webhook-stderr.log</string>
+</dict>
+</plist>

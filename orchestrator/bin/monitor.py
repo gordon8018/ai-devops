@@ -2,9 +2,11 @@
 import argparse
 import fnmatch
 import json
+import logging
 import os
 import sys as _sys
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Tuple
 
@@ -62,6 +64,16 @@ try:
 except ImportError:
     def notify(msg: str) -> None:
         print(f"[NOTIFY] {msg}")
+
+try:
+    from .timeout_config import get_task_timeout
+    from .alert_router import alert_critical, alert_warning
+    from .heartbeat import check_stale
+except ImportError:
+    from timeout_config import get_task_timeout
+    from alert_router import alert_critical, alert_warning
+    from heartbeat import check_stale
+
 
 try:
     from obsidian_client import ObsidianClient
@@ -314,6 +326,54 @@ def _process_task(t: dict, notified_ready: set) -> None:
         update_task(task_id, {"status": "blocked", "note": "invalid task record (missing id/worktree/branch)"})
         t["status"] = "blocked"
         return
+
+    # === TIMEOUT CHECK ===
+    started_at = t.get("started_at") or t.get("startedAt")
+    last_activity = t.get("last_activity_at") or t.get("lastActivityAt")
+    timeout_minutes = t.get("timeout_minutes") or get_task_timeout(task_id=task_id, repo=t.get("repo"))
+    
+    if started_at and timeout_minutes:
+        now_ms = int(time.time() * 1000)
+        activity_time = last_activity or started_at
+        elapsed_minutes = (now_ms - activity_time) / 60000
+        
+        if elapsed_minutes > timeout_minutes:
+            update_task(task_id, {
+                "status": "timeout",
+                "completed_at": now_ms,
+                "note": f"Task exceeded timeout of {timeout_minutes} minutes (elapsed: {int(elapsed_minutes)} min)"
+            })
+            t["status"] = "timeout"
+            try:
+                alert_critical(
+                    title=f"Task Timeout: {task_id}",
+                    message=f"Task \"{t.get('title', 'unknown')}\" exceeded {timeout_minutes} min timeout (elapsed: {int(elapsed_minutes)} min). Repo: {t.get('repo', 'unknown')}"
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to send timeout alert: {e}")
+            return
+
+    # === STALE CHECK ===
+    # 检查任务是否超过 30 分钟无心跳
+    try:
+        if check_stale(task_id, threshold_minutes=30):
+            update_task(task_id, {
+                "status": "log_stale",
+                "note": f"Task stale: no heartbeat for >30 minutes"
+            })
+            t["status"] = "log_stale"
+            try:
+                alert_warning(
+                    title=f"Task Stale: {task_id}",
+                    message=f"Task \"{t.get('title', 'unknown')}\" has no heartbeat for >30 minutes. "
+                            f"Repo: {t.get('repo', 'unknown')}. Check agent process."
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to send stale alert: {e}")
+            return
+    except Exception as e:
+        print(f"[WARN] Stale check failed for {task_id}: {e}")
+
 
     if execution_mode == "process":
         alive = process_alive(process_id)

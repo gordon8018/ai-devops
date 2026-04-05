@@ -26,10 +26,20 @@ except ImportError:
     from task_spec import constraint_path_list as _constraint_path_list
 
 # 导入 SQLite 跟踪模块
+# 导入全局调度器
 try:
-    from .db import init_db, get_task, insert_task
+    from .global_scheduler import get_global_scheduler, GlobalScheduler
 except ImportError:
-    from db import init_db, get_task, insert_task
+    from global_scheduler import get_global_scheduler, GlobalScheduler
+
+try:
+    from .db import init_db, get_task, insert_task, get_running_tasks
+    from .process_guardian import ProcessGuardian
+    from .heartbeat import update_heartbeat
+except ImportError:
+    from db import init_db, get_task, insert_task, get_running_tasks
+    from process_guardian import ProcessGuardian
+    from heartbeat import update_heartbeat
 
 
 def _agent_runner_codex() -> Path:
@@ -332,15 +342,157 @@ def spawn_agent(task: dict) -> dict:
     return item
 
 
+
+def start_api_server(port: int = 8080):
+    """Start REST API server in daemon thread"""
+    try:
+        import sys
+        api_dir = Path(__file__).parent.parent / "api"
+        if str(api_dir) not in sys.path:
+            sys.path.insert(0, str(api_dir.parent))
+        
+        # Import and inject resources handler
+        from orchestrator.api import server as api_server_module
+        from orchestrator.api.resources import create_resources_handler
+        from orchestrator.api.server import BaseAPIHandler, APIServer
+        
+        # Monkey patch create_combined_handler to include resources
+        original_create_combined_handler = api_server_module.create_combined_handler
+        
+        def create_combined_handler_with_resources() -> type:
+            handler = original_create_combined_handler()
+            handler = create_resources_handler(handler)
+            return handler
+        
+        api_server_module.create_combined_handler = create_combined_handler_with_resources
+        
+        server = APIServer(port=port)
+        server.start(daemon=True)
+        
+        # Print resources API endpoints
+        print(f"[API]   - GET    /api/resources")
+        print(f"[API]   - GET    /api/resources/cpu")
+        print(f"[API]   - GET    /api/resources/memory")
+        print(f"[API]   - GET    /api/resources/disk")
+        
+        print(f"[API] REST API server started on port {port}")
+        return server
+    except Exception as e:
+        print(f"[API] Failed to start API server: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 def main() -> None:
     # 初始化 SQLite 数据库
     init_db()
 
+    # 启动 REST API 服务器
+    api_port = int(os.getenv("ZOE_API_PORT", "8080"))
+    api_server = start_api_server(port=api_port)
+
+    # 初始化进程守护
+    def on_restart_callback(task_id: str, session_name: str) -> None:
+        print(f"[GUARDIAN] Restarted task {task_id} in session {session_name}")
+
+    def on_max_restarts_callback(task_id: str, restart_count: int) -> None:
+        print(f"[GUARDIAN] Task {task_id} exceeded max restarts ({restart_count}), marked as failed")
+
+    guardian = ProcessGuardian(
+        on_restart=on_restart_callback,
+        on_max_restarts=on_max_restarts_callback,
+    )
+
     q = queue_dir()
     q.mkdir(parents=True, exist_ok=True)
     print(f"Zoe daemon started. Watching queue: {q}")
+    print(f"ProcessGuardian initialized. Monitoring agent sessions...")
 
+    # 资源监控（每 30 秒采集一次）
+    try:
+        from resource_monitor import get_resource_monitor
+        resource_monitor = get_resource_monitor()
+        resource_collect_interval = 30  # 30 秒
+        last_resource_collect_time = 0
+        print("[RESOURCE] Resource monitor initialized")
+    except Exception as e:
+        print(f"[RESOURCE-ERROR] Failed to initialize resource monitor: {e}")
+        resource_monitor = None
+        resource_collect_interval = 30
+        last_resource_collect_time = 0
+
+    # 心跳上报间隔（秒）
+    heartbeat_interval = 300  # 5 分钟
+    last_heartbeat_time = 0
+
+    # 初始化全局调度器
+    try:
+        scheduler = get_global_scheduler()
+        scheduling_interval = 60  # 60 秒
+        last_scheduling_time = 0
+        print("[SCHEDULER] Global scheduler initialized")
+    except Exception as e:
+        print(f"[SCHEDULER-ERROR] Failed to initialize scheduler: {e}")
+        scheduler = None
+        scheduling_interval = 60
+        last_scheduling_time = 0
+    
     while True:
+        now = time.time()
+        
+        # 资源监控采集
+        if resource_monitor and now - last_resource_collect_time >= resource_collect_interval:
+            try:
+                summary = resource_monitor.get_summary()
+                cpu_pct = summary.get("cpu", {}).get("percent", 0)
+                mem_pct = summary.get("memory", {}).get("percent", 0)
+                disk_pct = summary.get("disk", {}).get("percent", 0)
+                print(f"[RESOURCE] CPU: {cpu_pct}% | Memory: {mem_pct}% | Disk: {disk_pct}%")
+                last_resource_collect_time = now
+            except Exception as e:
+                print(f"[RESOURCE-ERROR] Failed to collect resource data: {e}")
+        
+        # 心跳上报：为所有运行中的任务更新心跳
+        if now - last_heartbeat_time >= heartbeat_interval:
+            try:
+                running_tasks = get_running_tasks()
+                for task in running_tasks:
+                    try:
+                        update_heartbeat(task["id"])
+                    except Exception as e:
+                        print(f"[HEARTBEAT-ERROR] Failed to update heartbeat for {task['id']}: {e}")
+                last_heartbeat_time = now
+                if running_tasks:
+                    print(f"[HEARTBEAT] Updated heartbeat for {len(running_tasks)} running tasks")
+            except Exception as e:
+                print(f"[HEARTBEAT-ERROR] Heartbeat update failed: {e}")
+        
+        # 全局调度器周期调度
+        if scheduler and now - last_scheduling_time >= scheduling_interval:
+            try:
+                decisions = scheduler.schedule()
+                if decisions:
+                    dispatched = sum(1 for d in decisions if d.decision == "dispatched")
+                    if dispatched > 0:
+                        print(f"[SCHEDULER] Dispatched {dispatched} plans")
+                last_scheduling_time = now
+            except Exception as e:
+                print(f"[SCHEDULER-ERROR] Scheduling cycle failed: {e}")
+
+        
+        # 进程守护检查
+        try:
+            report = guardian.check_all()
+            for task_id, info in report.items():
+                status = info.get("status", "unknown")
+                detail = info.get("detail", "")
+                if status in ("restarted", "max_restarts", "restart_failed"):
+                    print(f"[GUARDIAN] Task {task_id}: {status} - {detail}")
+        except Exception as e:
+            print(f"[GUARDIAN-ERROR] Check failed: {e}")
+
+        # 队列处理
         for p in sorted(q.glob("*.json")):
             try:
                 task = json.loads(p.read_text(encoding="utf-8"))
@@ -354,6 +506,10 @@ def main() -> None:
 
                 item = spawn_agent(task)
                 insert_task(item)
+
+                # 添加到进程守护监控
+                if item.get("tmuxSession"):
+                    guardian.add_task(item["id"], item["tmuxSession"])
 
                 p.unlink(missing_ok=True)
                 if item["executionMode"] == "tmux":

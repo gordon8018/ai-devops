@@ -50,6 +50,13 @@ from agent_utils import (
     print_task_detail,
 )
 
+# 导入消息总线
+try:
+    from message_bus import get_message_bus, Message
+except ImportError:
+    from orchestrator.bin.message_bus import get_message_bus, Message
+
+
 # 延迟导入 zoe_tools（仅在 plan/dispatch 命令需要）
 def get_zoe_tools():
     import zoe_tools
@@ -450,6 +457,81 @@ def cmd_plans(args):
         )
 
 
+
+
+def cmd_message(args):
+    """通过消息总线发送消息"""
+    init_db()
+    
+    bus = get_message_bus()
+    
+    # 发送消息
+    message_id = bus.send_message(
+        from_agent=args.from_agent or "cli",
+        to_agent=args.to_agent,
+        content={"text": args.content},
+        topic=args.topic
+    )
+    
+    print(f"✓ Message sent: {message_id}")
+    print(f"  From: {args.from_agent or 'cli'}")
+    print(f"  To: {args.to_agent}")
+    print(f"  Topic: {args.topic or 'N/A'}")
+    print(f"  Content: {args.content}")
+
+
+def cmd_messages(args):
+    """接收消息"""
+    init_db()
+    
+    bus = get_message_bus()
+    agent_id = args.agent or "cli"
+    
+    # 接收消息
+    messages = bus.receive_messages(agent_id, limit=args.limit)
+    
+    if not messages:
+        print(f"No pending messages for {agent_id}")
+        return
+    
+    print(f"\n{'='*60}")
+    print(f"Messages for {agent_id} ({len(messages)} pending)")
+    print(f"{'='*60}\n")
+    
+    for msg in messages:
+        print(f"ID: {msg.message_id}")
+        print(f"From: {msg.from_agent}")
+        print(f"Topic: {msg.topic or 'N/A'}")
+        print(f"Time: {format_timestamp(msg.timestamp)}")
+        print(f"Content: {msg.content}")
+        print("-" * 60)
+
+
+def cmd_message_list(args):
+    """列出所有消息"""
+    init_db()
+    
+    from db import get_all_messages
+    
+    messages = get_all_messages(limit=args.limit)
+    
+    if not messages:
+        print("No messages found.")
+        return
+    
+    print(f"\n{'='*80}")
+    print(f"Recent Messages ({len(messages)} found)")
+    print(f"{'='*80}\n")
+    
+    for msg in messages:
+        delivered = "✓" if msg.get("delivered") else "✗"
+        print(f"[{delivered}] {msg['message_id']}")
+        print(f"    {msg['from_agent']} -> {msg['to_agent']}")
+        print(f"    Topic: {msg.get('topic') or 'N/A'}")
+        print(f"    Time: {format_timestamp(msg['timestamp'])}")
+        print(f"    Content: {msg.get('content')}")
+        print()
+
 # ============================================================================
 # 主入口
 # ============================================================================
@@ -570,6 +652,26 @@ Examples:
     p = subparsers.add_parser("plans", help="List recent plans with progress summary")
     p.add_argument("--limit", type=int, default=10)
     p.set_defaults(func=cmd_plans)
+
+
+    # 发送消息
+    p = subparsers.add_parser("message", help="Send message to another agent")
+    p.add_argument("to_agent", help="Target agent ID")
+    p.add_argument("content", help="Message content")
+    p.add_argument("--from", dest="from_agent", help="Sender agent ID (default: cli)")
+    p.add_argument("--topic", help="Message topic")
+    p.set_defaults(func=cmd_message)
+
+    # 接收消息
+    p = subparsers.add_parser("messages", help="Receive messages for an agent")
+    p.add_argument("--agent", help="Agent ID (default: cli)")
+    p.add_argument("--limit", type=int, default=10, help="Max messages to retrieve")
+    p.set_defaults(func=cmd_messages)
+
+    # 列出所有消息
+    p = subparsers.add_parser("msg-list", help="List all recent messages")
+    p.add_argument("--limit", type=int, default=20, help="Max messages to show")
+    p.set_defaults(func=cmd_message_list)
 
     args = parser.parse_args()
     args.func(args)

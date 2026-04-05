@@ -1,0 +1,26 @@
+[Unit]
+Description=AI DevOps GitHub Webhook Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/user01/ai-devops/orchestrator/bin/webhook_server.py --port 8080 --daemon
+WorkingDirectory=/home/user01/ai-devops
+Environment=AI_DEVOPS_HOME=/home/user01/ai-devops
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+Environment=GITHUB_WEBHOOK_SECRET=CHANGE_ME_SECRET_KEY
+
+# Restart on failure
+Restart=always
+RestartSec=10
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Logging
+StandardOutput=append:/home/user01/ai-devops/logs/webhook-stdout.log
+StandardError=append:/home/user01/ai-devops/logs/webhook-stderr.log
+
+[Install]
+WantedBy=multi-user.target

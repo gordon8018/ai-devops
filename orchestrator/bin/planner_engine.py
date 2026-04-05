@@ -8,6 +8,11 @@ import re
 from typing import Any, Mapping
 
 try:
+    from .context_injector import get_context_injector, ContextInjector
+except ImportError:
+    from context_injector import get_context_injector, ContextInjector
+
+try:
     from .errors import InvalidPlan
     from .plan_schema import Plan
     from .task_spec import constraint_path_list as _constraint_path_list
@@ -1046,6 +1051,13 @@ class ZoePlannerEngine:
         routing = task_input.get("routing") if isinstance(task_input.get("routing"), dict) else {}
         constraints = dict(task_input.get("constraints")) if isinstance(task_input.get("constraints"), dict) else {}
         context = dict(task_input.get("context")) if isinstance(task_input.get("context"), dict) else {}
+        # CTX-3: 注入上下文（共享工作区、消息历史、成功/失败模式）
+        injector = get_context_injector()
+        agent_id = routing.get("agentId") if isinstance(routing, dict) else None
+        injected_task_input = injector.inject_context(plan_id, dict(task_input), agent_id=agent_id)
+        injected_context = injected_task_input.get("context", {})
+        if injected_context:
+            context.update(injected_context)
         # Propagate successPatterns from context into constraints so _build_prompt() can access them
         success_patterns = context.get("successPatterns")
         if success_patterns:

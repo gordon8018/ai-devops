@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 
 try:
     from .errors import InvalidPlan
@@ -177,6 +177,8 @@ class Plan:
     subtasks: tuple[Subtask, ...]
     routing: RoutingDefaults
     version: str
+    plan_depends_on: tuple[str, ...] = field(default_factory=tuple)
+    global_priority: int = 0
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Plan":
@@ -207,6 +209,16 @@ class Plan:
 
         cls._validate_dependencies(subtasks)
 
+        # Parse plan_depends_on (cross-plan dependencies)
+        plan_depends_on = _optional_string_list(data, "planDependsOn")
+        
+        # Parse global_priority with validation
+        global_priority = 0
+        if "globalPriority" in data:
+            gp = data["globalPriority"]
+            if isinstance(gp, int):
+                global_priority = gp
+
         return cls(
             plan_id=plan_id,
             repo=_require_string(data, "repo"),
@@ -219,6 +231,8 @@ class Plan:
             subtasks=subtasks,
             routing=routing,
             version=_require_string(data, "version"),
+            plan_depends_on=plan_depends_on,
+            global_priority=global_priority,
         )
 
     @staticmethod
@@ -301,6 +315,10 @@ class Plan:
         routing = self.routing.to_dict()
         if routing:
             payload["routing"] = routing
+        if self.plan_depends_on:
+            payload["planDependsOn"] = list(self.plan_depends_on)
+        if self.global_priority != 0:
+            payload["globalPriority"] = self.global_priority
         return payload
 
     def write_json(self, path: Path) -> None:

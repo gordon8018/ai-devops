@@ -14,9 +14,9 @@ except ImportError:
     from config import ai_devops_home
 
 try:
-    from .db import init_db, get_all_tasks
+    from .db import init_db, get_all_tasks, insert_plan, get_plan, get_plan_status, are_plan_dependencies_completed
 except ImportError:
-    from db import init_db, get_all_tasks
+    from db import init_db, get_all_tasks, insert_plan, get_plan, get_plan_status, are_plan_dependencies_completed
 
 try:
     from .errors import DispatchError
@@ -26,6 +26,16 @@ except ImportError:
     from errors import DispatchError
     from plan_schema import Plan, Subtask, load_plan, sanitize_identifier
     from task_spec import constraint_path_list as _constraint_path_list
+
+try:
+    from .global_scheduler import GlobalScheduler, get_global_scheduler, SchedulerConfig
+except ImportError:
+    from global_scheduler import GlobalScheduler, get_global_scheduler, SchedulerConfig
+
+try:
+    from .status_propagator import StatusPropagator, get_status_propagator
+except ImportError:
+    from status_propagator import StatusPropagator, get_status_propagator
 
 
 def default_base_dir() -> Path:
@@ -246,6 +256,130 @@ def _validate_plan_id_collision(plan: Plan, base_dir: Path) -> None:
 _COMPLETED_STATUSES: frozenset[str] = frozenset({"ready", "merged"})
 
 
+def can_dispatch(plan: Plan, base_dir: Path | None = None) -> tuple[bool, list[str]]:
+    """
+    Check if a plan can be dispatched.
+    
+    Returns (can_dispatch, list_of_blocking_reasons)
+    
+    A plan can only be dispatched when:
+    1. All plans it depends on (plan_depends_on) are completed
+    2. Local subtask dependencies are satisfied (handled separately in dispatch_ready_subtasks)
+    """
+    if not plan.plan_depends_on:
+        return (True, [])
+    
+    try:
+        init_db()
+    except Exception:
+        # If DB init fails, allow dispatch (fallback behavior)
+        return (True, ["Warning: DB init failed, skipping cross-plan dependency check"])
+    
+    blocking_reasons = []
+    for dep_plan_id in plan.plan_depends_on:
+        dep_status = get_plan_status(dep_plan_id)
+        if dep_status is None:
+            blocking_reasons.append(f"Dependency plan '{dep_plan_id}' not found in registry")
+        elif dep_status != "completed":
+            blocking_reasons.append(f"Dependency plan '{dep_plan_id}' status: {dep_status} (expected: completed)")
+    
+    return (len(blocking_reasons) == 0, blocking_reasons)
+
+
+def register_plan(plan: Plan, base_dir: Path | None = None) -> None:
+    """Register a plan in the database for cross-plan dependency tracking."""
+    try:
+        init_db()
+        plan_record = {
+            "plan_id": plan.plan_id,
+            "repo": plan.repo,
+            "title": plan.title,
+            "requested_by": plan.requested_by,
+            "requested_at": plan.requested_at,
+            "objective": plan.objective,
+            "constraints": plan.constraints,
+            "context": plan.context,
+            "version": plan.version,
+            "plan_depends_on": list(plan.plan_depends_on),
+            "global_priority": plan.global_priority,
+            "status": "pending",
+        }
+        insert_plan(plan_record)
+    except Exception:
+        # Non-fatal: registration failure should not block dispatch
+        pass
+
+
+def update_plan_status_from_tasks(plan: Plan, registry_items: list[dict[str, Any]] | None = None) -> str:
+    """
+    Determine and update plan status based on subtask execution status.
+    
+    Returns the computed status.
+    """
+    if registry_items is None:
+        try:
+            init_db()
+            registry_items = get_all_tasks(limit=1000)
+        except Exception:
+            registry_items = []
+    
+    # Find all tasks for this plan
+    plan_tasks = []
+    for item in registry_items:
+        metadata = _extract_plan_metadata(item.get("metadata"))
+        if metadata.get("planId") == plan.plan_id:
+            plan_tasks.append(item)
+    
+    if not plan_tasks:
+        return "pending"
+    
+    # Count statuses
+    status_counts = {}
+    for task in plan_tasks:
+        status = task.get("status", "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+    
+    total = len(plan_tasks)
+    completed = sum(status_counts.get(s, 0) for s in _COMPLETED_STATUSES)
+    
+    # Determine plan status
+    if completed == total:
+        plan_status = "completed"
+    elif any(s in status_counts for s in ("running", "pr_created", "retrying")):
+        plan_status = "running"
+    elif any(s in status_counts for s in ("failed", "agent_dead", "blocked")):
+        plan_status = "failed"
+    else:
+        plan_status = "pending"
+    
+    # Get old status before update
+    old_status = None
+    try:
+        old_status = get_plan_status(plan.plan_id)
+    except Exception:
+        pass
+    
+    # Update database
+    try:
+        update_plan(plan.plan_id, {"status": plan_status})
+    except Exception:
+        pass
+    
+    # Propagate status change if status actually changed
+    if old_status != plan_status:
+        try:
+            propagator = get_status_propagator()
+            propagator.on_plan_status_change(
+                plan_id=plan.plan_id,
+                old_status=old_status or "unknown",
+                new_status=plan_status,
+            )
+        except Exception as e:
+            print(f"[dispatch] Status propagation failed for {plan.plan_id}: {e}")
+    
+    return plan_status
+
+
 def _extract_plan_metadata(raw_meta: Any) -> dict[str, Any]:
     if isinstance(raw_meta, str):
         try:
@@ -351,8 +485,31 @@ def dispatch_ready_subtasks(
     *,
     base_dir: Path | None = None,
     registry_items: list[dict[str, Any]] | None = None,
+    skip_cross_plan_check: bool = False,
 ) -> list[Path]:
+    """
+    Dispatch ready subtasks for a plan.
+    
+    Args:
+        plan: The plan to dispatch
+        base_dir: Base directory for ai-devops
+        registry_items: Optional pre-fetched registry items
+        skip_cross_plan_check: If True, skip cross-plan dependency check
+    
+    Returns:
+        List of queued task file paths
+    """
     root = base_dir or default_base_dir()
+    
+    # Check cross-plan dependencies before dispatching
+    if not skip_cross_plan_check:
+        can_dispatch_now, blocking_reasons = can_dispatch(plan, root)
+        if not can_dispatch_now:
+            # Log blocking reasons and return empty (no tasks dispatched)
+            # This is not an error - just waiting for dependencies
+            print(f"[dispatch] Plan {plan.plan_id} waiting for dependencies: {blocking_reasons}")
+            return []
+    
     queue_root = _dispatch_queue_dir(root)
     queue_root.mkdir(parents=True, exist_ok=True)
     if registry_items is None:
@@ -361,6 +518,10 @@ def dispatch_ready_subtasks(
             registry_items = get_all_tasks(limit=1000)
         except Exception:
             registry_items = []
+    
+    # Register/update plan in database
+    register_plan(plan, root)
+    
     state = load_dispatch_state(plan, root)
     dispatched = state.setdefault("dispatched", {})
     completed = ready_subtask_ids(plan, registry_items)
@@ -439,3 +600,117 @@ def load_plan_for_dispatch(plan_file: Path) -> Plan:
     if not plan_file.exists():
         raise DispatchError(f"Plan file not found: {plan_file}")
     return load_plan(plan_file)
+
+
+# ============ Global Scheduler Integration ============
+
+def get_plan_scheduling_priority(plan: Plan) -> int:
+    """
+    Get the scheduling priority for a plan.
+    
+    Higher values indicate higher priority.
+    
+    Args:
+        plan: The plan to check
+        
+    Returns:
+        Priority value (higher = more important)
+    """
+    return plan.global_priority
+
+
+def dispatch_with_global_scheduler(
+    plans: list[Plan],
+    *,
+    base_dir: Path | None = None,
+    max_concurrent_tasks: int = 5,
+    max_concurrent_plans: int = 3,
+) -> dict[str, Any]:
+    """
+    Dispatch multiple plans using the global scheduler.
+    
+    This function uses GlobalScheduler to:
+    - Sort plans by priority (global_priority)
+    - Check cross-plan dependencies (plan_depends_on)
+    - Respect resource limits (concurrency)
+    
+    Args:
+        plans: List of plans to dispatch
+        base_dir: Base directory for ai-devops
+        max_concurrent_tasks: Maximum concurrent tasks
+        max_concurrent_plans: Maximum concurrent plans
+        
+    Returns:
+        Dictionary with dispatch results and scheduling decisions
+    """
+    from pathlib import Path
+    
+    root = base_dir or default_base_dir()
+    
+    # Create scheduler with custom config
+    config = SchedulerConfig(
+        max_concurrent_tasks=max_concurrent_tasks,
+        max_concurrent_plans=max_concurrent_plans,
+        log_decisions=True,
+    )
+    scheduler = GlobalScheduler(config)
+    
+    # Sort plans by priority (higher first)
+    sorted_plans = sorted(plans, key=lambda p: (-p.global_priority, p.requested_at))
+    
+    results = {
+        "dispatched": [],
+        "blocked": [],
+        "deferred": [],
+        "total_plans": len(plans),
+    }
+    
+    # Check each plan
+    for plan in sorted_plans:
+        # Check cross-plan dependencies
+        can_dispatch_now, blocking_reasons = can_dispatch(plan, root)
+        
+        if not can_dispatch_now:
+            results["blocked"].append({
+                "planId": plan.plan_id,
+                "reasons": blocking_reasons,
+            })
+            continue
+        
+        # Check resource availability
+        resource_available, resource_info = scheduler.check_resource_availability()
+        
+        if not resource_available:
+            results["deferred"].append({
+                "planId": plan.plan_id,
+                "reason": "Resource limits reached",
+                "resourceInfo": resource_info,
+            })
+            continue
+        
+        # Dispatch the plan
+        try:
+            queued_paths = dispatch_ready_subtasks(plan, base_dir=root, skip_cross_plan_check=True)
+            results["dispatched"].append({
+                "planId": plan.plan_id,
+                "queuedTasks": len(queued_paths),
+                "paths": [str(p) for p in queued_paths],
+            })
+        except Exception as e:
+            results["blocked"].append({
+                "planId": plan.plan_id,
+                "reasons": [f"Dispatch error: {str(e)}"],
+            })
+    
+    return results
+
+
+def get_scheduling_summary() -> dict[str, Any]:
+    """
+    Get a summary of the current scheduling state.
+    
+    Returns:
+        Dictionary with scheduling statistics
+    """
+    scheduler = get_global_scheduler()
+    return scheduler.get_scheduling_summary()

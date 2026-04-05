@@ -107,8 +107,13 @@ def init_db() -> None:
                 last_failure_at INTEGER,
                 note TEXT,
                 metadata TEXT,
+                restart_count INTEGER DEFAULT 0,
+                last_restart_at REAL,
                 created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
-                updated_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
+                updated_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+                timeout_minutes INTEGER,
+                last_activity_at INTEGER,
+                last_heartbeat_at INTEGER
             )
         """)
 
@@ -126,6 +131,15 @@ def init_db() -> None:
             ("notify_on_complete", "INTEGER DEFAULT 1"),
             ("worktree_strategy", "TEXT DEFAULT 'isolated'"),
             ("cleaned_up", "INTEGER DEFAULT 0"),
+            ("restart_count", "INTEGER DEFAULT 0"),
+            ("last_restart_at", "REAL"),
+            ("timeout_minutes", "INTEGER"),
+            ("last_activity_at", "INTEGER"),
+            ("last_heartbeat_at", "INTEGER"),
+            ("recovery_state", "TEXT"),
+            ("recovery_started_at", "INTEGER"),
+            ("recovery_attempts", "INTEGER DEFAULT 0"),
+            ("recovery_metadata", "TEXT"),
         ]
         for col_name, col_def in new_columns:
             try:
@@ -133,6 +147,70 @@ def init_db() -> None:
             except sqlite3.OperationalError:
                 pass  # column already exists
 
+
+        # Plans table for cross-plan dependency tracking
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS plans (
+                plan_id TEXT PRIMARY KEY,
+                repo TEXT NOT NULL,
+                title TEXT NOT NULL,
+                requested_by TEXT NOT NULL,
+                requested_at INTEGER NOT NULL,
+                objective TEXT,
+                constraints TEXT,
+                context TEXT,
+                version TEXT NOT NULL,
+                plan_depends_on TEXT DEFAULT '[]',
+                global_priority INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'pending',
+                created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+                updated_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_plans_repo ON plans(repo)")
+        
+        # Migrate existing plans table: add new columns if absent
+        plan_columns = [
+            ("plan_depends_on", "TEXT DEFAULT '[]'"),
+            ("global_priority", "INTEGER DEFAULT 0"),
+        ]
+        for col_name, col_def in plan_columns:
+            try:
+                conn.execute(f"ALTER TABLE plans ADD COLUMN {col_name} {col_def}")
+            except sqlite3.OperationalError:
+                pass  # column already exists
+        
+
+        # Messages table for agent inter-communication
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                message_id TEXT PRIMARY KEY,
+                from_agent TEXT NOT NULL,
+                to_agent TEXT NOT NULL,
+                content TEXT,
+                timestamp INTEGER NOT NULL,
+                topic TEXT,
+                delivered INTEGER DEFAULT 0,
+                created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_to_agent ON messages(to_agent)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_from_agent ON messages(from_agent)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_delivered ON messages(delivered)")
+        
+        # Migrate existing messages table: add new columns if absent
+        message_columns = [
+            ("topic", "TEXT"),
+            ("delivered", "INTEGER DEFAULT 0"),
+            ("created_at", "INTEGER DEFAULT (strftime('%s', 'now') * 1000)"),
+        ]
+        for col_name, col_def in message_columns:
+            try:
+                conn.execute(f"ALTER TABLE messages ADD COLUMN {col_name} {col_def}")
+            except sqlite3.OperationalError:
+                pass  # column already exists
         conn.commit()
 
 
@@ -147,8 +225,9 @@ def insert_task(task: dict) -> None:
             (id, plan_id, repo, title, status, agent, model, effort,
              worktree, branch, tmux_session, process_id,
              execution_mode, prompt_file, notify_on_complete, worktree_strategy,
-             cleaned_up, started_at, attempts, max_attempts, metadata, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             cleaned_up, started_at, attempts, max_attempts, metadata,
+             timeout_minutes, last_activity_at, last_heartbeat_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             task["id"],
             task.get("planId") or task.get("plan_id"),
@@ -171,7 +250,10 @@ def insert_task(task: dict) -> None:
             task.get("attempts", 0),
             task.get("maxAttempts") or task.get("max_attempts", 3),
             json.dumps(task.get("metadata", {})),
-            int(time.time() * 1000)
+            task.get("timeout_minutes"),
+            task.get("last_activity_at"),
+            task.get("last_heartbeat_at"),
+            int(time.time() * 1000),
         ))
         conn.commit()
 
@@ -312,6 +394,9 @@ def update_task(task_id: str, updates: dict) -> None:
         "last_failure", "last_failure_at", "note", "metadata",
         "execution_mode", "prompt_file", "notify_on_complete",
         "worktree_strategy", "cleaned_up",
+        "restart_count", "last_restart_at",
+        "last_heartbeat_at",
+        "recovery_state", "recovery_started_at", "recovery_attempts", "recovery_metadata",
     }
     
     fields = []
@@ -361,4 +446,264 @@ def count_running_tasks() -> int:
         )
         return cursor.fetchone()[0]
 
+# ============ Plans Table Operations ============
 
+def insert_plan(plan: dict) -> None:
+    """Insert or update a plan"""
+    plan_depends_on = plan.get("plan_depends_on", [])
+    if isinstance(plan_depends_on, (list, tuple)):
+        plan_depends_on = json.dumps(list(plan_depends_on))
+    elif not isinstance(plan_depends_on, str):
+        plan_depends_on = "[]"
+    
+    constraints = plan.get("constraints", {})
+    if isinstance(constraints, dict):
+        constraints = json.dumps(constraints)
+    elif not isinstance(constraints, str):
+        constraints = "{}"
+    
+    context = plan.get("context", {})
+    if isinstance(context, dict):
+        context = json.dumps(context)
+    elif not isinstance(context, str):
+        context = "{}"
+    
+    with get_db() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO plans
+            (plan_id, repo, title, requested_by, requested_at, objective,
+             constraints, context, version, plan_depends_on, global_priority,
+             status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            plan["plan_id"],
+            plan["repo"],
+            plan["title"],
+            plan["requested_by"],
+            plan["requested_at"],
+            plan.get("objective", ""),
+            constraints,
+            context,
+            plan["version"],
+            plan_depends_on,
+            plan.get("global_priority", 0),
+            plan.get("status", "pending"),
+            plan.get("created_at", int(time.time() * 1000)),
+            int(time.time() * 1000),
+        ))
+        conn.commit()
+
+
+def get_plan(plan_id: str) -> Optional[dict]:
+    """Get a single plan by ID"""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "SELECT * FROM plans WHERE plan_id = ?",
+            (plan_id,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        # Parse JSON fields
+        if result.get("plan_depends_on"):
+            try:
+                result["plan_depends_on"] = json.loads(result["plan_depends_on"])
+            except (json.JSONDecodeError, ValueError):
+                result["plan_depends_on"] = []
+        else:
+            result["plan_depends_on"] = []
+        if result.get("constraints"):
+            try:
+                result["constraints"] = json.loads(result["constraints"])
+            except (json.JSONDecodeError, ValueError):
+                result["constraints"] = {}
+        if result.get("context"):
+            try:
+                result["context"] = json.loads(result["context"])
+            except (json.JSONDecodeError, ValueError):
+                result["context"] = {}
+        return result
+
+
+def update_plan(plan_id: str, updates: dict) -> None:
+    """Update plan fields"""
+    allowed_fields = {
+        "repo", "title", "objective", "constraints", "context",
+        "version", "plan_depends_on", "global_priority", "status"
+    }
+    
+    fields = []
+    values = []
+    for key, value in updates.items():
+        if key in allowed_fields:
+            if key == "plan_depends_on":
+                if isinstance(value, (list, tuple)):
+                    value = json.dumps(list(value))
+                elif not isinstance(value, str):
+                    value = "[]"
+            elif key in ("constraints", "context"):
+                if isinstance(value, dict):
+                    value = json.dumps(value)
+                elif not isinstance(value, str):
+                    value = "{}"
+            fields.append(f"{key} = ?")
+            values.append(value)
+    
+    if not fields:
+        return
+    
+    fields.append("updated_at = ?")
+    values.append(int(time.time() * 1000))
+    values.append(plan_id)
+    
+    with get_db() as conn:
+        conn.execute(
+            f"UPDATE plans SET {', '.join(fields)} WHERE plan_id = ?",
+            values
+        )
+        conn.commit()
+
+
+def get_all_plans(limit: int = 50) -> list[dict]:
+    """Get recent plans"""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "SELECT * FROM plans ORDER BY created_at DESC LIMIT ?",
+            (limit,)
+        )
+        results = []
+        for row in cursor.fetchall():
+            plan = dict(row)
+            if plan.get("plan_depends_on"):
+                try:
+                    plan["plan_depends_on"] = json.loads(plan["plan_depends_on"])
+                except (json.JSONDecodeError, ValueError):
+                    plan["plan_depends_on"] = []
+            else:
+                plan["plan_depends_on"] = []
+            results.append(plan)
+        return results
+
+
+def get_plan_status(plan_id: str) -> Optional[str]:
+    """Get the status of a plan (pending, running, completed, failed)"""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "SELECT status FROM plans WHERE plan_id = ?",
+            (plan_id,)
+        )
+        row = cursor.fetchone()
+        return row["status"] if row else None
+
+
+def are_plan_dependencies_completed(plan_id: str) -> tuple[bool, list[str]]:
+    """
+    Check if all dependencies of a plan are completed.
+    Returns (all_completed, list_of_incomplete_plan_ids)
+    """
+    plan = get_plan(plan_id)
+    if not plan:
+        return (False, [plan_id])
+    
+    depends_on = plan.get("plan_depends_on", [])
+    if not depends_on:
+        return (True, [])
+    
+    incomplete = []
+    for dep_plan_id in depends_on:
+        dep_status = get_plan_status(dep_plan_id)
+        if dep_status != "completed":
+            incomplete.append(dep_plan_id)
+    
+    return (len(incomplete) == 0, incomplete)
+
+
+# ============ Messages Table Operations ============
+
+def save_message(message: dict) -> None:
+    """Save a message to the database"""
+    content = message.get("content")
+    if not isinstance(content, str):
+        content = json.dumps(content) if content else "{}"
+    
+    with get_db() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO messages
+            (message_id, from_agent, to_agent, content, timestamp, topic, delivered, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            message["message_id"],
+            message["from_agent"],
+            message["to_agent"],
+            content,
+            message["timestamp"],
+            message.get("topic"),
+            message.get("delivered", 0),
+            message.get("created_at", int(time.time() * 1000)),
+        ))
+        conn.commit()
+
+
+def get_pending_messages(to_agent: str, limit: int = 10) -> list[dict]:
+    """Get pending (undelivered) messages for an agent"""
+    with get_db() as conn:
+        cursor = conn.execute(
+            """SELECT * FROM messages 
+               WHERE to_agent = ? AND delivered = 0 
+               ORDER BY timestamp ASC 
+               LIMIT ?""",
+            (to_agent, limit)
+        )
+        messages = []
+        for row in cursor.fetchall():
+            msg = dict(row)
+            # Parse content if JSON
+            if msg.get("content"):
+                try:
+                    msg["content"] = json.loads(msg["content"])
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            messages.append(msg)
+        return messages
+
+
+def mark_message_delivered(message_id: str) -> None:
+    """Mark a message as delivered"""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE messages SET delivered = 1 WHERE message_id = ?",
+            (message_id,)
+        )
+        conn.commit()
+
+
+def get_all_messages(limit: int = 50) -> list[dict]:
+    """Get recent messages"""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "SELECT * FROM messages ORDER BY timestamp DESC LIMIT ?",
+            (limit,)
+        )
+        messages = []
+        for row in cursor.fetchall():
+            msg = dict(row)
+            if msg.get("content"):
+                try:
+                    msg["content"] = json.loads(msg["content"])
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            messages.append(msg)
+        return messages
+
+
+def delete_old_messages(days: int = 30) -> int:
+    """Delete messages older than N days"""
+    cutoff_ms = int((time.time() - days * 86400) * 1000)
+    with get_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM messages WHERE timestamp < ?",
+            (cutoff_ms,)
+        )
+        conn.commit()
+        return cursor.rowcount

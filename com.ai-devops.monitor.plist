@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Label for launchctl -->
+    <key>Label</key>
+    <string>com.ai-devops.monitor</string>
+    
+    <!-- Program to run -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/gordon/ai-devops/orchestrator/bin/monitor.py</string>
+        <key>--once</key>
+    </array>
+    
+    <!-- Run every 10 minutes (600 seconds) -->
+    <key>StartInterval</key>
+    <integer>600</integer>
+    
+    <!-- Run at load time -->
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>/Users/gordon/ai-devops</string>
+    
+    <!-- Standard output log -->
+    <key>StandardOutPath</key>
+    <string>/Users/gordon/ai-devops/logs/monitor-stdout.log</string>
+    
+    <!-- Standard error log -->
+    <key>StandardErrorPath</key>
+    <string>/Users/gordon/ai-devops/logs/monitor-stderr.log</string>
+    
+    <!-- Environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>AI_DEVOPS_HOME</key>
+        <string>/Users/gordon/ai-devops</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    
+    <!-- Keep alive if crashes -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+</dict>
+</plist>
