@@ -1,0 +1,43 @@
+{
+  "obsidian": {
+    "vault_dir": "~/obsidian-vault/gordon8018/ai-devops",
+    "sync_categories": {
+      "reports": "reports",
+      "reviews": "reviews",
+      "decisions": "decisions",
+      "agents": "agents"
+    },
+    "file_patterns": ["*.md", "*.json"],
+    "max_file_size_kb": 512,
+    "add_frontmatter": true
+  },
+  "fast_node_sync": {
+    "cli_dir": "~/FastNodeSync-CLI",
+    "command": "python3 -m fns_cli.main run",
+    "timeout_seconds": 120,
+    "enabled": true
+  },
+  "gbrain": {
+    "dir": "~/.openclaw/workspace-alpha/gbrain",
+    "import_command": "bun run src/cli.ts import",
+    "embed_command": "bun run src/cli.ts embed --new",
+    "timeout_seconds": 300,
+    "enabled": true
+  },
+  "workflow": {
+    "post_task_hooks": ["obsidian_sync", "gbrain_indexer"],
+    "execution_order": ["obsidian_sync", "gbrain_indexer"],
+    "continue_on_failure": true,
+    "retry_count": 1,
+    "retry_delay_seconds": 10
+  },
+  "tagging": {
+    "auto_tags": ["task-id", "date", "project"],
+    "project_default": "ai-devops",
+    "date_format": "%Y%m%d"
+  },
+  "filtering": {
+    "exclude_patterns": ["node_modules", ".git", "__pycache__", "*.pyc", ".DS_Store"],
+    "min_file_size_bytes": 10
+  }
+}

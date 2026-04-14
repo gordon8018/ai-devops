@@ -320,6 +320,142 @@ sequenceDiagram
 
 ---
 
+
+## 🤖 Ralph 集成
+
+### 概述
+
+Ralph 是一个自治 AI 编码循环工具，集成到 ai-devops 后可以作为执行引擎，处理确定性强、验收标准明确的任务。
+
+### 集成组件
+
+| 组件 | 功能 | 路径 |
+|------|------|------|
+| **task_to_prd.py** | TaskSpec → prd.json 转换器 | `orchestrator/bin/task_to_prd.py` |
+| **ralph_state.py** | ralph 执行状态存储 | `orchestrator/bin/ralph_state.py` |
+| **ralph_runner.py** | ralph.sh 执行包装器 | `orchestrator/bin/ralph_runner.py` |
+
+### 核心功能
+
+#### 1. TaskSpec → prd.json 转换
+
+将 ai-devops TaskSpec 格式转换为 ralph 的 prd.json 格式：
+
+```python
+from task_to_prd import task_spec_to_prd_json, save_prd_json
+
+task_spec = {
+    "taskId": "task-20260414-001",
+    "task": "Add priority field to database",
+    "acceptanceCriteria": ["Add priority column", "Typecheck passes"],
+    "repo": "user01/ai-devops",
+    "userStories": ["Create migration", "Update API"]
+}
+
+prd = task_spec_to_prd_json(task_spec)
+save_prd_json(prd, "prd.json")
+```
+
+#### 2. 状态存储与同步
+
+使用 SQLite 存储 ralph 执行状态：
+
+```python
+from ralph_state import RalphState
+
+state = RalphState()
+
+# 创建状态
+state.create(task_id="task-001", status="queued", progress=0)
+
+# 更新状态
+state.update("task-001", status="running", progress=25)
+
+# 追加日志
+state.append_log("task-001", "Started iteration 1")
+
+# 查询状态
+entry = state.get("task-001")
+```
+
+#### 3. ralph 执行包装
+
+封装 ralph.sh 执行并捕获输出：
+
+```python
+from ralph_runner import RalphRunner
+
+runner = RalphRunner(ralph_dir="/path/to/ralph")
+
+# 保存 PRD
+runner.save_prd_json(prd)
+
+# 执行 ralph
+result = runner.run(max_iterations=10, background=True)
+
+# 获取状态
+status = runner.get_status()
+```
+
+### 完整工作流
+
+```python
+# 1. 转换 TaskSpec → prd.json
+prd = task_spec_to_prd_json(task_spec)
+
+# 2. 初始化状态
+state = RalphState()
+state.create(task_spec["taskId"], status="queued", progress=0)
+
+# 3. 保存 PRD 并执行
+runner = RalphRunner(ralph_dir="/path/to/ralph")
+runner.save_prd_json(prd)
+state.update(task_spec["taskId"], status="running")
+runner.run(max_iterations=10, background=True)
+
+# 4. 监控进度
+while True:
+    status = runner.get_status()
+    prd_info = runner.parse_prd_json()
+    
+    state.update(task_spec["taskId"], progress=prd_info["progress_percent"])
+    state.append_log(task_spec["taskId"], f"Iteration {prd_info['completed_stories']}")
+    
+    if status["status"] in ("completed", "failed"):
+        break
+    
+    time.sleep(30)
+```
+
+### 测试
+
+运行 ralph 集成测试：
+
+```bash
+cd /home/user01/ai-devops/orchestrator/bin
+python3 tests/test_ralph_integration.py
+```
+
+### 文档
+
+详细文档请参考：[RALPH_INTEGRATION.md](docs/RALPH_INTEGRATION.md)
+
+### 适用场景
+
+Ralph 适合处理：
+
+- ✅ 确定性强的任务（明确的验收标准）
+- ✅ 小故事拆分（每个故事独立可执行）
+- ✅ 质量检查要求高的任务（typecheck、lint、test）
+
+Ralph 不适合：
+
+- ❌ 探索性任务（需要创造性决策）
+- ❌ 复杂依赖任务（跨多个模块/系统）
+- ❌ 实时交互任务（需要人工干预）
+
+---
+
 ## 📊 测试报告
 
 ### 测试概览

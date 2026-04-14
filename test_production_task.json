@@ -1,0 +1,52 @@
+{
+  "title": "添加日志模块到 ai-devops 项目",
+  "goal": "为 ai-devops 项目添加统一的日志模块，提供结构化日志输出、日志级别控制和文件轮转功能。不修改现有代码的日志输出，仅提供新模块供未来使用。",
+  "repo": "gordon8018/ai-devops",
+  "workingRoot": "/home/user01/ai-devops",
+  "allowedPaths": [
+    "/home/user01/ai-devops/orchestrator/bin/logger.py",
+    "/home/user01/ai-devops/orchestrator/bin/logger_config.py",
+    "/home/user01/ai-devops/orchestrator/bin/__init__.py"
+  ],
+  "forbiddenPaths": [
+    "/home/user01/ai-devops/discord/**",
+    "/home/user01/ai-devops/tests/**",
+    "/home/user01/ai-devops/.clawdbot/**",
+    "/home/user01/ai-devops/docs/**",
+    "/home/user01/ai-devops/scripts/**",
+    "/home/user01/ai-devops/worktrees/**",
+    "/home/user01/ai-devops/repos/**"
+  ],
+  "mustTouch": [
+    "/home/user01/ai-devops/orchestrator/bin/logger.py"
+  ],
+  "preferCreate": [
+    "/home/user01/ai-devops/orchestrator/bin/logger.py",
+    "/home/user01/ai-devops/orchestrator/bin/logger_config.py"
+  ],
+  "preferEdit": [
+    "/home/user01/ai-devops/orchestrator/bin/__init__.py"
+  ],
+  "definitionOfDone": [
+    "创建了 logger.py 模块，提供 getLogger() 工厂函数",
+    "创建了 logger_config.py 配置模块，支持日志级别和格式配置",
+    "支持 DEBUG、INFO、WARNING、ERROR、CRITICAL 五种日志级别",
+    "支持控制台输出和文件输出",
+    "支持日志文件轮转（按大小和时间）",
+    "包含基本的使用示例和文档字符串",
+    "通过了类型检查（如果有 mypy）",
+    "没有修改 forbiddenPaths 中的任何文件"
+  ],
+  "validation": [
+    "运行 python -c 'from orchestrator.bin.logger import getLogger; log = getLogger(__name__); log.info(\"test\")' 验证模块可导入",
+    "验证日志文件是否正确创建",
+    "检查代码是否符合 Python 代码规范（flake8 或类似工具）"
+  ],
+  "firstStepRequirement": "在开始编码前，列出计划创建/编辑的所有文件，并解释每个文件的作用和为什么它在 allowedPaths 范围内。",
+  "failureRules": [
+    "如果计划创建的文件不在 allowedPaths 中，停止并失败",
+    "如果编辑了 forbiddenPaths 中的任何文件，停止并失败",
+    "如果没有创建 logger.py，停止并失败",
+    "如果修改了 tests/、docs/、discord/ 等目录，停止并失败"
+  ]
+}
