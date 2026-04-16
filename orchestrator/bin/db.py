@@ -171,6 +171,20 @@ def _build_work_item_from_task(task: dict[str, Any]) -> WorkItem:
         "ops": WorkItemType.OPS,
     }.get(explicit_type, WorkItemType.FEATURE)
 
+    # PR-0.2 Task 6: dedup_key is a first-class field on the WorkItem.
+    # Preference order: task["dedup_key"] -> metadata["dedupKey"] -> metadata["dedup_key"].
+    raw_dedup = (
+        task.get("dedup_key")
+        if task.get("dedup_key") is not None
+        else metadata.get("dedupKey") or metadata.get("dedup_key")
+    )
+    dedup_key_value: str | None
+    if raw_dedup is None:
+        dedup_key_value = None
+    else:
+        stripped = str(raw_dedup).strip()
+        dedup_key_value = stripped or None
+
     return WorkItem(
         work_item_id=str(task["id"]),
         type=work_item_type,
@@ -196,6 +210,7 @@ def _build_work_item_from_task(task: dict[str, Any]) -> WorkItem:
             },
             "metadata": metadata,
         },
+        dedup_key=dedup_key_value,
     )
 
 
@@ -307,6 +322,14 @@ def init_db() -> None:
             except sqlite3.OperationalError:
                 pass  # column already exists
 
+        # PR-0.2 Task 6: add dedup_key via PRAGMA table_info + conditional ALTER
+        # (D2: SQLite uses PRAGMA lookup instead of ADD COLUMN IF NOT EXISTS)
+        existing_task_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(agent_tasks)").fetchall()
+        }
+        if "dedup_key" not in existing_task_cols:
+            conn.execute("ALTER TABLE agent_tasks ADD COLUMN dedup_key TEXT")
+
 
         # Plans table for cross-plan dependency tracking
         conn.execute("""
@@ -379,6 +402,21 @@ def insert_task(task: dict) -> None:
 
     Note: cleaned_up is normally set via mark_cleaned_up() after worktree removal.
     """
+    # PR-0.2 Task 6: pull dedup_key from direct field or metadata (camelCase preferred).
+    metadata_for_dedup = task.get("metadata") or {}
+    if not isinstance(metadata_for_dedup, dict):
+        metadata_for_dedup = {}
+    raw_dedup_for_insert = (
+        task.get("dedup_key")
+        if task.get("dedup_key") is not None
+        else metadata_for_dedup.get("dedupKey") or metadata_for_dedup.get("dedup_key")
+    )
+    if raw_dedup_for_insert is None:
+        dedup_key_column_value: Optional[str] = None
+    else:
+        stripped_dedup = str(raw_dedup_for_insert).strip()
+        dedup_key_column_value = stripped_dedup or None
+
     with get_db() as conn:
         conn.execute("""
             INSERT OR REPLACE INTO agent_tasks
@@ -386,8 +424,8 @@ def insert_task(task: dict) -> None:
              worktree, branch, tmux_session, process_id,
              execution_mode, prompt_file, notify_on_complete, worktree_strategy,
              cleaned_up, started_at, attempts, max_attempts, metadata,
-             timeout_minutes, last_activity_at, last_heartbeat_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             timeout_minutes, last_activity_at, last_heartbeat_at, dedup_key, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             task["id"],
             task.get("planId") or task.get("plan_id"),
@@ -413,6 +451,7 @@ def insert_task(task: dict) -> None:
             task.get("timeout_minutes"),
             task.get("last_activity_at"),
             task.get("last_heartbeat_at"),
+            dedup_key_column_value,
             int(time.time() * 1000),
         ))
         conn.commit()
@@ -558,6 +597,7 @@ def update_task(task_id: str, updates: dict) -> None:
         "restart_count", "last_restart_at",
         "last_heartbeat_at",
         "recovery_state", "recovery_started_at", "recovery_attempts", "recovery_metadata",
+        "dedup_key",
     }
     
     fields = []

@@ -89,3 +89,66 @@ def test_configure_control_plane_dual_write_uses_store_builder() -> None:
         )
 
         assert store.work_items[0]["workItemId"] == "task-003"
+
+
+def test_insert_task_mirrors_dedup_key_to_control_plane() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_mod = _reload_db_module(tmpdir)
+        db_mod.init_db()
+
+        # Verify idempotent dedup_key migration added the column
+        import sqlite3 as _sqlite3
+
+        with _sqlite3.connect(os.fspath(db_mod.DB_PATH)) as _conn:
+            cols = {row[1] for row in _conn.execute("PRAGMA table_info(agent_tasks)").fetchall()}
+        assert "dedup_key" in cols
+
+        store = RecordingStore()
+        db_mod.enable_control_plane_dual_write(store)
+
+        # Case 1: dedup_key provided directly on the task dict
+        db_mod.insert_task(
+            {
+                "id": "task-dedup-direct",
+                "repo": "acme/platform",
+                "title": "Direct dedup key",
+                "status": "queued",
+                "dedup_key": "incident-direct-1",
+            }
+        )
+        assert store.work_items[-1]["dedupKey"] == "incident-direct-1"
+
+        # Case 2: dedupKey in metadata (camelCase preferred)
+        db_mod.insert_task(
+            {
+                "id": "task-dedup-metacamel",
+                "repo": "acme/platform",
+                "title": "Metadata camelCase dedup",
+                "status": "queued",
+                "metadata": {"dedupKey": "incident-meta-cc"},
+            }
+        )
+        assert store.work_items[-1]["dedupKey"] == "incident-meta-cc"
+
+        # Case 3: dedup_key in metadata (snake_case fallback)
+        db_mod.insert_task(
+            {
+                "id": "task-dedup-metasnake",
+                "repo": "acme/platform",
+                "title": "Metadata snake_case dedup",
+                "status": "queued",
+                "metadata": {"dedup_key": "incident-meta-sc"},
+            }
+        )
+        assert store.work_items[-1]["dedupKey"] == "incident-meta-sc"
+
+        # Case 4: no dedup key anywhere -> None
+        db_mod.insert_task(
+            {
+                "id": "task-dedup-absent",
+                "repo": "acme/platform",
+                "title": "No dedup key",
+                "status": "queued",
+            }
+        )
+        assert store.work_items[-1]["dedupKey"] is None
