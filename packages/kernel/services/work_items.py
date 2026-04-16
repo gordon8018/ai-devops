@@ -55,13 +55,25 @@ class WorkItemService:
         base_dir=None,
     ) -> LegacyWorkItemSession:
         work_item = WorkItem.from_legacy_task_input(task_input)
-        self._event_bus.publish("work_item.created", work_item.to_dict())
+        self._event_bus.publish(
+            "work_item.created",
+            work_item.to_dict(),
+            source="kernel.work_items",
+            actor_id="system:kernel",
+            actor_type="system",
+        )
 
         context_pack = self._context_assembler.build(
             work_item,
             legacy_task_input=task_input,
         )
-        self._event_bus.publish("context_pack.created", context_pack.to_dict())
+        self._event_bus.publish(
+            "context_pack.created",
+            context_pack.to_dict(),
+            source="kernel.work_items",
+            actor_id="system:kernel",
+            actor_type="system",
+        )
 
         context = {
             **dict(task_input.get("context") or {}),
@@ -95,6 +107,9 @@ class WorkItemService:
                 "workItemId": work_item.work_item_id,
                 "planId": plan_request["planId"],
             },
+            source="kernel.work_items",
+            actor_id="system:kernel",
+            actor_type="system",
         )
         return LegacyWorkItemSession(
             work_item=work_item,
@@ -124,7 +139,13 @@ class WorkItemService:
             planned_steps=tuple(planned_steps),
         )
         run.validate_for_execution()
-        self._event_bus.publish("agent_run.prepared", run.to_dict())
+        self._event_bus.publish(
+            "agent_run.prepared",
+            run.to_dict(),
+            source="kernel.work_items",
+            actor_id="system:kernel",
+            actor_type="system",
+        )
         return run
 
     def transition_work_item_status(

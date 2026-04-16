@@ -4,6 +4,7 @@ import time
 
 import pytest
 
+from orchestrator.api.events import EventManager
 from packages.context.packer.service import ContextPackAssembler
 from packages.kernel.events.bus import InMemoryEventBus
 from packages.kernel.services.work_items import MissingContextPackError, MissingQualityRunError, WorkItemService
@@ -74,6 +75,32 @@ def test_prepare_agent_run_requires_context_pack() -> None:
             agent="codex",
             model="gpt-5.3-codex",
         )
+
+
+def test_create_legacy_session_bridges_domain_events_to_event_manager() -> None:
+    manager = EventManager()
+    manager.clear_history()
+    bus = InMemoryEventBus(event_manager=manager)
+    service = WorkItemService(event_bus=bus, context_assembler=ContextPackAssembler())
+
+    service.create_legacy_session(
+        {
+            "repo": "acme/platform",
+            "title": "Bridge work item events",
+            "description": "Ensure domain events leave kernel bus",
+        }
+    )
+
+    history = manager.get_history(limit=3)
+
+    assert [event["eventName"] for event in history] == [
+        "work_item.created",
+        "context_pack.created",
+        "plan.requested",
+    ]
+    assert all(event["source"] == "kernel.work_items" for event in history)
+    assert all(event["actorId"] == "system:kernel" for event in history)
+    assert all(event["actorType"] == "system" for event in history)
 
 
 def test_prepare_agent_run_binds_context_pack_and_starts_pending() -> None:
