@@ -245,6 +245,12 @@ class ControlPlanePostgresStore:
             conn.commit()
 
     def save_incident(self, incident: dict) -> None:
+        # D3: sourceSystem / dedupKey live only in independent columns.
+        payload_body = {
+            key: value
+            for key, value in incident.items()
+            if key not in ("sourceSystem", "dedupKey")
+        }
         with self._connection_factory() as conn:
             conn.cursor().execute(
                 """
@@ -265,7 +271,7 @@ class ControlPlanePostgresStore:
                     incident.get("workItemId"),
                     incident["severity"],
                     incident["status"],
-                    json.dumps(incident, ensure_ascii=False, sort_keys=True),
+                    json.dumps(payload_body, ensure_ascii=False, sort_keys=True),
                     incident.get("sourceSystem"),
                     incident.get("dedupKey"),
                 ),
@@ -466,8 +472,9 @@ class ControlPlanePostgresStore:
     @staticmethod
     def _decode_incident_row(row) -> dict | None:
         """Decode an incidents row into a dict, promoting source_system /
-        dedup_key columns onto the top level (preferring column values over
-        anything embedded in payload_json for defensive parity)."""
+        dedup_key columns onto the top level. New writes strip these keys from
+        payload_json (see save_incident), so the payload-side fallback only
+        exists to decode legacy rows written before that contract landed."""
         if row is None:
             return None
         if isinstance(row, (list, tuple)):

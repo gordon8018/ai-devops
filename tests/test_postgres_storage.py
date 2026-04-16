@@ -221,6 +221,41 @@ def test_save_incident_writes_source_system_and_dedup_key_as_independent_columns
     assert "pd-alert-42" in params
 
 
+def test_save_incident_excludes_source_system_and_dedup_key_from_payload_json() -> None:
+    import json
+
+    conn = RecordingConnection()
+    store = ControlPlanePostgresStore(lambda: conn)
+
+    incident = {
+        "incidentId": "inc_002",
+        "workItemId": None,
+        "severity": "high",
+        "status": "open",
+        "sourceSystem": "pagerduty",
+        "dedupKey": "pd-alert-42",
+        "message": "boom",
+    }
+
+    store.save_incident(incident)
+
+    insert_statements = [
+        (sql, params)
+        for sql, params in conn.cursor_instance.executed
+        if "INSERT INTO incidents" in sql
+    ]
+    assert insert_statements, "expected INSERT INTO incidents statement"
+    _, params = insert_statements[0]
+    # Per D3: payload_json must not duplicate the independent columns.
+    payload_json = params[4]
+    decoded = json.loads(payload_json)
+    assert "sourceSystem" not in decoded
+    assert "dedupKey" not in decoded
+    # Other incident fields still land in payload_json.
+    assert decoded["incidentId"] == "inc_002"
+    assert decoded["message"] == "boom"
+
+
 def test_get_incident_returns_top_level_source_system_and_dedup_key() -> None:
     import json
 
