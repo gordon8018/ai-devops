@@ -32,6 +32,12 @@ python3 scripts/package_1_acceptance.py
   - `newStatus`
   - `qualityRunId`
 
+## Breaking Change Notice
+
+- `work_item.status_changed` event payload no longer exposes the legacy top-level `status` field.
+- Consumers must read `oldStatus` / `newStatus` instead.
+- This package only guarantees backward compatibility for the coarse `EventType` envelope, not for the old status payload shape.
+
 ## Manual Notes
 
 - Run the script with `python3`; this environment does not expose a `python` alias.
