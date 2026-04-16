@@ -37,14 +37,20 @@ class Event:
     data: Dict[str, Any]
     timestamp: float = field(default_factory=lambda: time.time())
     source: Optional[str] = None
+    event_name: Optional[str] = None
+    actor_id: str = "system:legacy"
+    actor_type: str = "system"
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert event to dictionary for JSON serialization"""
         return {
             "type": self.event_type.value,
+            "eventName": self.event_name,
             "data": self.data,
             "timestamp": self.timestamp,
             "source": self.source,
+            "actorId": self.actor_id,
+            "actorType": self.actor_type,
         }
     
     def to_json(self) -> str:

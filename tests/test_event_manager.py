@@ -4,7 +4,25 @@ import importlib
 import os
 import tempfile
 
-from orchestrator.api.events import EventManager
+from orchestrator.api.events import Event, EventManager, EventType
+
+
+def test_event_to_dict_includes_event_name_and_actor_fields() -> None:
+    event = Event(
+        event_type=EventType.SYSTEM,
+        event_name="work_item.created",
+        data={"workItemId": "wi_001"},
+        source="kernel",
+        actor_id="system:kernel",
+        actor_type="system",
+    )
+
+    payload = event.to_dict()
+
+    assert payload["type"] == "system"
+    assert payload["eventName"] == "work_item.created"
+    assert payload["actorId"] == "system:kernel"
+    assert payload["actorType"] == "system"
 
 
 def test_event_manager_get_history_supports_limit_slicing() -> None:
