@@ -77,6 +77,16 @@ def test_mutation_service_rolls_back_when_audit_fails() -> None:
     assert calls == ["persist", "audit", "rollback"]
 
 
+def test_mutation_service_reraises_audit_failure_without_rollback() -> None:
+    service = MutationService()
+
+    with pytest.raises(RuntimeError, match="audit failed"):
+        service.apply(
+            persist=lambda: None,
+            audit=lambda: (_ for _ in ()).throw(RuntimeError("audit failed")),
+        )
+
+
 def test_mutation_service_raises_when_event_publish_fails() -> None:
     calls: list[str] = []
 
