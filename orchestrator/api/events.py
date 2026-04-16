@@ -43,15 +43,17 @@ class Event:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert event to dictionary for JSON serialization"""
-        return {
+        payload = {
             "type": self.event_type.value,
-            "eventName": self.event_name,
             "data": self.data,
             "timestamp": self.timestamp,
             "source": self.source,
             "actorId": self.actor_id,
             "actorType": self.actor_type,
         }
+        if self.event_name is not None:
+            payload["eventName"] = self.event_name
+        return payload
     
     def to_json(self) -> str:
         """Convert event to JSON string"""

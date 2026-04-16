@@ -64,3 +64,40 @@ def test_kernel_bus_bridge_publishes_domain_events_to_event_manager() -> None:
     assert history[0]["eventName"] == "work_item.created"
     assert history[0]["data"]["workItemId"] == "wi_001"
     assert history[0]["actorId"] == "system:kernel"
+
+
+def test_kernel_bus_bridge_does_not_recurse_when_subscriber_republishes_once() -> None:
+    manager = EventManager()
+    manager.clear_history()
+    bus = InMemoryEventBus()
+    bridge_kernel_event_bus(bus, manager)
+
+    republished = False
+
+    def republish_once(envelope: EventEnvelope) -> None:
+        nonlocal republished
+        if republished:
+            return
+        republished = True
+        bus.publish(
+            "work_item.republished",
+            {"workItemId": envelope.payload["workItemId"]},
+            source="kernel",
+            actor_id="system:kernel",
+            actor_type="system",
+        )
+
+    bus.subscribe(republish_once)
+    bus.publish(
+        "work_item.created",
+        {"workItemId": "wi_001"},
+        source="kernel",
+        actor_id="system:kernel",
+        actor_type="system",
+    )
+
+    history = manager.get_history(limit=10)
+    assert [event["eventName"] for event in history] == [
+        "work_item.created",
+        "work_item.republished",
+    ]

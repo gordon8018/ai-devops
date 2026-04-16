@@ -203,6 +203,29 @@ def test_transition_work_item_status_publishes_old_and_new_status() -> None:
     assert last_event.payload["newStatus"] == "released"
 
 
+def test_transition_work_item_status_emits_event_for_noop_transition() -> None:
+    bus = InMemoryEventBus()
+    service = WorkItemService(event_bus=bus, context_assembler=ContextPackAssembler())
+    session = service.create_legacy_session(
+        {
+            "repo": "acme/platform",
+            "title": "No-op transition",
+            "description": "Current semantics keep an explicit status change event even for no-ops",
+        }
+    )
+
+    service.transition_work_item_status(
+        session.work_item,
+        target_status=session.work_item.status,
+        quality_run=None,
+    )
+
+    last_event = bus.history()[-1]
+    assert last_event.event_type == "work_item.status_changed"
+    assert last_event.payload["oldStatus"] == session.work_item.status.value
+    assert last_event.payload["newStatus"] == session.work_item.status.value
+
+
 def test_work_item_from_legacy_task_input_preserves_dedup_key() -> None:
     from packages.shared.domain.models import WorkItem
 

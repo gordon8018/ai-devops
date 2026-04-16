@@ -25,6 +25,18 @@ def test_event_to_dict_includes_event_name_and_actor_fields() -> None:
     assert payload["actorType"] == "system"
 
 
+def test_event_to_dict_omits_event_name_when_unset() -> None:
+    event = Event(
+        event_type=EventType.SYSTEM,
+        data={"workItemId": "wi_001"},
+        source="kernel",
+    )
+
+    payload = event.to_dict()
+
+    assert "eventName" not in payload
+
+
 def test_event_manager_get_history_supports_limit_slicing() -> None:
     manager = EventManager()
     manager.clear_history()
