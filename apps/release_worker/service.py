@@ -10,6 +10,7 @@ from packages.release.rollout.service import RolloutController
 from packages.shared.domain.control_plane import ensure_control_plane_store
 from packages.shared.domain.models import AuditEvent
 from packages.shared.domain.runtime_state import record_audit_event
+from packages.shared.mutation import MutationService
 
 _GLOBAL_RELEASE_WORKER: "ReleaseWorker | None" = None
 
@@ -25,12 +26,15 @@ class ReleaseWorker:
         rollout_controller: RolloutController | None = None,
         rollback_controller: RollbackController | None = None,
         persistence_store: Any | None = None,
+        audit_recorder: Callable[[AuditEvent], None] | None = None,
     ) -> None:
         self._event_manager = event_manager
         self._flag_adapter = flag_adapter or StatsigFlagAdapter()
         self._rollout_controller = rollout_controller or RolloutController()
         self._rollback_controller = rollback_controller or RollbackController()
         self._persistence_store = persistence_store or ensure_control_plane_store()
+        self._audit_recorder = audit_recorder or record_audit_event
+        self._mutations = MutationService()
         self._releases: dict[str, dict[str, Any]] = {}
         self._unsubscribe: Callable[[], None] | None = None
 
@@ -70,6 +74,26 @@ class ReleaseWorker:
                 return releases
         return list(self._releases.values())
 
+    def _persist_release(self, work_item_id: str, release: dict[str, Any]) -> None:
+        snapshot = dict(release)
+        self._releases[work_item_id] = snapshot
+        store = self._store()
+        if store is not None and hasattr(store, "save_release"):
+            store.save_release(snapshot)
+
+    def _rollback_release(self, work_item_id: str, previous_release: dict[str, Any] | None) -> None:
+        store = self._store()
+        if previous_release is None:
+            self._releases.pop(work_item_id, None)
+            if store is not None and hasattr(store, "delete_release"):
+                store.delete_release(work_item_id)
+            return
+
+        restored = dict(previous_release)
+        self._releases[work_item_id] = restored
+        if store is not None and hasattr(store, "save_release"):
+            store.save_release(restored)
+
     def advance(self, work_item_id: str) -> dict[str, Any] | None:
         release = self.get_release(work_item_id)
         if release is None:
@@ -77,31 +101,34 @@ class ReleaseWorker:
         if release.get("status") in {"rolled_back", "succeeded"}:
             return release
 
-        current_stage = release.get("stage") or "unknown"
+        previous_release = dict(release)
+        updated_release = dict(release)
+        current_stage = updated_release.get("stage") or "unknown"
         next_stage = self._rollout_controller.next_stage(current_stage)
-        release["stage"] = next_stage
+        updated_release["stage"] = next_stage
         if next_stage == "full":
-            release["status"] = "succeeded"
+            updated_release["status"] = "succeeded"
 
-        self._releases[work_item_id] = release
-        store = self._store()
-        if store is not None and hasattr(store, "save_release"):
-            store.save_release(release)
-        self._flag_adapter.apply_stage(release["releaseId"], next_stage)
-
-        action = "release_succeeded" if release["status"] == "succeeded" else "release_stage_advanced"
-        record_audit_event(
-            AuditEvent(
-                audit_event_id=f"ae_{release['releaseId']}_{action}_{int(time.time() * 1000)}",
-                entity_type="release",
-                entity_id=release["releaseId"],
-                action=action,
-                payload={"workItemId": work_item_id, "stage": next_stage},
-                actor_id="system:release_worker",
-                actor_type="system",
-            )
+        action = "release_succeeded" if updated_release["status"] == "succeeded" else "release_stage_advanced"
+        self._mutations.apply(
+            persist=lambda: self._persist_release(work_item_id, updated_release),
+            audit=lambda: self._audit_recorder(
+                AuditEvent(
+                    audit_event_id=f"ae_{updated_release['releaseId']}_{action}_{int(time.time() * 1000)}",
+                    entity_type="release",
+                    entity_id=updated_release["releaseId"],
+                    action=action,
+                    payload={"workItemId": work_item_id, "stage": next_stage},
+                    actor_id="system:release_worker",
+                    actor_type="system",
+                )
+            ),
+            publish_events=[
+                lambda: self._flag_adapter.apply_stage(updated_release["releaseId"], next_stage)
+            ],
+            rollback=lambda: self._rollback_release(work_item_id, previous_release),
         )
-        return release
+        return updated_release
 
     def _handle_event(self, event: Event) -> None:
         if event.event_type is EventType.TASK_STATUS:
@@ -128,21 +155,21 @@ class ReleaseWorker:
             "stage": stage,
             "status": "rolling_out",
         }
-        self._releases[work_item_id] = release
-        store = self._store()
-        if store is not None and hasattr(store, "save_release"):
-            store.save_release(release)
-        self._flag_adapter.apply_stage(release_id, stage)
-        record_audit_event(
-            AuditEvent(
-                audit_event_id=f"ae_{release_id}_started_{int(time.time() * 1000)}",
-                entity_type="release",
-                entity_id=release_id,
-                action="release_started",
-                payload={"workItemId": work_item_id, "stage": stage},
-                actor_id="system:release_worker",
-                actor_type="system",
-            )
+        self._mutations.apply(
+            persist=lambda: self._persist_release(work_item_id, release),
+            audit=lambda: self._audit_recorder(
+                AuditEvent(
+                    audit_event_id=f"ae_{release_id}_started_{int(time.time() * 1000)}",
+                    entity_type="release",
+                    entity_id=release_id,
+                    action="release_started",
+                    payload={"workItemId": work_item_id, "stage": stage},
+                    actor_id="system:release_worker",
+                    actor_type="system",
+                )
+            ),
+            publish_events=[lambda: self._flag_adapter.apply_stage(release_id, stage)],
+            rollback=lambda: self._rollback_release(work_item_id, None),
         )
 
     def _handle_system_event(self, payload: dict[str, Any]) -> None:
@@ -160,28 +187,32 @@ class ReleaseWorker:
         if not decision.should_rollback:
             return
 
-        release["status"] = "rolled_back"
-        release["rollbackReason"] = decision.reason
-        self._releases[work_item_id] = release
-        store = self._store()
-        if store is not None and hasattr(store, "save_release"):
-            store.save_release(release)
-        record_audit_event(
-            AuditEvent(
-                audit_event_id=f"ae_{release['releaseId']}_rolled_back_{int(time.time() * 1000)}",
-                entity_type="release",
-                entity_id=release["releaseId"],
-                action="release_rolled_back",
-                payload={"workItemId": work_item_id, "reason": decision.reason},
-                actor_id="system:release_worker",
-                actor_type="system",
-            )
-        )
-        self._event_manager.publish_alert(
-            "warning",
-            f"Release rolled back for {work_item_id}",
-            {"reason": decision.reason, "releaseId": release["releaseId"]},
-            source="release_worker",
+        previous_release = dict(release)
+        updated_release = dict(release)
+        updated_release["status"] = "rolled_back"
+        updated_release["rollbackReason"] = decision.reason
+        self._mutations.apply(
+            persist=lambda: self._persist_release(work_item_id, updated_release),
+            audit=lambda: self._audit_recorder(
+                AuditEvent(
+                    audit_event_id=f"ae_{updated_release['releaseId']}_rolled_back_{int(time.time() * 1000)}",
+                    entity_type="release",
+                    entity_id=updated_release["releaseId"],
+                    action="release_rolled_back",
+                    payload={"workItemId": work_item_id, "reason": decision.reason},
+                    actor_id="system:release_worker",
+                    actor_type="system",
+                )
+            ),
+            publish_events=[
+                lambda: self._event_manager.publish_alert(
+                    "warning",
+                    f"Release rolled back for {work_item_id}",
+                    {"reason": decision.reason, "releaseId": updated_release["releaseId"]},
+                    source="release_worker",
+                )
+            ],
+            rollback=lambda: self._rollback_release(work_item_id, previous_release),
         )
 
 

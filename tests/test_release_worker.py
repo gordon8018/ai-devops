@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from orchestrator.api.events import Event, EventManager, EventType
 from apps.release_worker.service import ReleaseWorker
 from packages.shared.domain.runtime_state import clear_runtime_state, list_audit_events
@@ -18,6 +20,9 @@ class InMemoryReleaseStore:
 
     def list_releases(self) -> list[dict]:
         return [dict(release) for release in self.releases.values()]
+
+    def delete_release(self, work_item_id: str) -> None:
+        self.releases.pop(work_item_id, None)
 
 
 class RecordingFlagAdapter:
@@ -366,3 +371,128 @@ def test_release_worker_rolls_back_persisted_release_after_restart() -> None:
     assert release is not None
     assert release["status"] == "rolled_back"
     restarted_worker.stop()
+
+
+def test_release_worker_does_not_persist_or_apply_flag_when_start_audit_fails() -> None:
+    event_manager = EventManager()
+    event_manager.clear_history()
+    store = InMemoryReleaseStore()
+    flag_adapter = RecordingFlagAdapter()
+    worker = ReleaseWorker(
+        event_manager=event_manager,
+        flag_adapter=flag_adapter,
+        persistence_store=store,
+        audit_recorder=lambda _event: (_ for _ in ()).throw(RuntimeError("audit failed")),
+    )
+    worker.start()
+
+    event_manager.publish(
+        Event(
+            event_type=EventType.TASK_STATUS,
+            data={
+                "task_id": "wi_audit_start_fail",
+                "status": "ready",
+                "details": {"work_item_id": "wi_audit_start_fail"},
+            },
+            source="test",
+        )
+    )
+
+    assert worker.get_release("wi_audit_start_fail") is None
+    assert store.get_release("wi_audit_start_fail") is None
+    assert flag_adapter.applied == []
+    worker.stop()
+
+
+def test_release_worker_does_not_advance_stage_or_apply_flag_when_advance_audit_fails() -> None:
+    event_manager = EventManager()
+    event_manager.clear_history()
+    store = InMemoryReleaseStore()
+    flag_adapter = RecordingFlagAdapter()
+
+    def conditional_audit(event) -> None:
+        if event.action == "release_stage_advanced":
+            raise RuntimeError("advance audit failed")
+
+    worker = ReleaseWorker(
+        event_manager=event_manager,
+        flag_adapter=flag_adapter,
+        persistence_store=store,
+        audit_recorder=conditional_audit,
+    )
+    worker.start()
+    event_manager.publish(
+        Event(
+            event_type=EventType.TASK_STATUS,
+            data={
+                "task_id": "wi_audit_advance_fail",
+                "status": "ready",
+                "details": {"work_item_id": "wi_audit_advance_fail"},
+            },
+            source="test",
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="advance audit failed"):
+        worker.advance("wi_audit_advance_fail")
+
+    release = worker.get_release("wi_audit_advance_fail")
+    assert release is not None
+    assert release["stage"] == "team-only"
+    assert release["status"] == "rolling_out"
+    assert store.get_release("wi_audit_advance_fail") == release
+    assert flag_adapter.applied == [("rel_wi_audit_advance_fail", "team-only")]
+    worker.stop()
+
+
+def test_release_worker_does_not_emit_alert_when_rollback_audit_fails() -> None:
+    event_manager = EventManager()
+    event_manager.clear_history()
+    store = InMemoryReleaseStore()
+    flag_adapter = RecordingFlagAdapter()
+
+    def conditional_audit(event) -> None:
+        if event.action == "release_rolled_back":
+            raise RuntimeError("rollback audit failed")
+
+    worker = ReleaseWorker(
+        event_manager=event_manager,
+        flag_adapter=flag_adapter,
+        persistence_store=store,
+        audit_recorder=conditional_audit,
+    )
+    worker.start()
+    event_manager.publish(
+        Event(
+            event_type=EventType.TASK_STATUS,
+            data={
+                "task_id": "wi_audit_rollback_fail",
+                "status": "ready",
+                "details": {"work_item_id": "wi_audit_rollback_fail"},
+            },
+            source="test",
+        )
+    )
+
+    event_manager.publish(
+        Event(
+            event_type=EventType.SYSTEM,
+            data={
+                "type": "guardrail_breach",
+                "work_item_id": "wi_audit_rollback_fail",
+                "guardrails": {"error_rate": 0.07},
+                "thresholds": {"error_rate": 0.05},
+            },
+            source="test",
+        )
+    )
+
+    release = worker.get_release("wi_audit_rollback_fail")
+    history = event_manager.get_history(limit=10)
+
+    assert release is not None
+    assert release["status"] == "rolling_out"
+    assert "rollbackReason" not in release
+    assert store.get_release("wi_audit_rollback_fail") == release
+    assert not any(event["type"] == "alert" for event in history)
+    worker.stop()
