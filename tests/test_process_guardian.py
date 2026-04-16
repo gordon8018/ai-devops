@@ -111,6 +111,11 @@ class TestProcessGuardianInit(unittest.TestCase):
         self.assertEqual(guardian.on_restart, on_restart)
         self.assertEqual(guardian.on_max_restarts, on_max_restarts)
 
+    def test_init_with_event_publisher(self):
+        publisher = MagicMock()
+        guardian = ProcessGuardian(event_publisher=publisher)
+        self.assertEqual(guardian.event_publisher, publisher)
+
 
 class TestProcessGuardianTaskManagement(unittest.TestCase):
     """ProcessGuardian 任务管理测试 (5 cases)"""
@@ -206,6 +211,60 @@ class TestProcessGuardianRestartLogic(unittest.TestCase):
         
         monitors = self.guardian.get_all_monitors()
         self.assertGreaterEqual(len(monitors), 1)
+
+    @patch("process_guardian.get_task")
+    @patch("process_guardian.update_task")
+    def test_attempt_restart_emits_restarted_event(self, mock_update, mock_get_task):
+        publisher = MagicMock()
+        guardian = ProcessGuardian(policy=RestartPolicy(max_restarts=3, cooldown_seconds=0), event_publisher=publisher)
+        monitor = TaskMonitorState(task_id="task-789", session_name="session-789")
+        task = {
+            "id": "task-789",
+            "status": "running",
+            "tmuxSession": "session-789",
+            "worktree": "/tmp/wt",
+            "agent": "codex",
+        }
+        tm = MagicMock()
+        tm.is_healthy = False
+        tm.safe_rebuild.return_value = (True, "ok")
+        guardian._monitors["task-789"] = monitor
+        guardian._build_tmux_manager = MagicMock(return_value=tm)
+
+        result = guardian._attempt_restart(task, monitor)
+
+        self.assertEqual(result["status"], "restarted")
+        publisher.assert_any_call("task_status", {"task_id": "task-789", "status": "restarted", "restart_count": 1})
+
+    @patch("process_guardian.get_event_manager")
+    @patch("process_guardian.update_task")
+    def test_attempt_restart_uses_default_event_manager_publisher(self, mock_update, mock_get_event_manager):
+        manager = MagicMock()
+        mock_get_event_manager.return_value = manager
+        guardian = ProcessGuardian(policy=RestartPolicy(max_restarts=3, cooldown_seconds=0))
+        monitor = TaskMonitorState(task_id="task-790", session_name="session-790")
+        task = {
+            "id": "task-790",
+            "status": "running",
+            "tmuxSession": "session-790",
+            "worktree": "/tmp/wt",
+            "agent": "codex",
+        }
+        tm = MagicMock()
+        tm.is_healthy = False
+        tm.safe_rebuild.return_value = (True, "ok")
+        guardian._monitors["task-790"] = monitor
+        guardian._build_tmux_manager = MagicMock(return_value=tm)
+
+        result = guardian._attempt_restart(task, monitor)
+
+        self.assertEqual(result["status"], "restarted")
+        manager.publish_task_status.assert_called_once_with(
+            "task-790",
+            "restarted",
+            {"restart_count": 1},
+            source="process_guardian",
+        )
 
 
 class TestProcessGuardianRecoveryState(unittest.TestCase):

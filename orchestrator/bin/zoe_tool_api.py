@@ -91,6 +91,13 @@ def _success(tool: str, result: dict[str, Any]) -> dict[str, Any]:
         "ok": True,
         "tool": tool,
         "result": result,
+        "governance": {
+            "legacyCompatibility": {
+                "status": "deprecated",
+                "message": "Legacy Zoe tool API is in compatibility mode. Prefer the platform WorkItem and Console APIs.",
+                "preferredEntrypoint": "/api/work-items",
+            }
+        },
     }
 
 

@@ -724,6 +724,7 @@ def _subtask_payload(
     files_hint: list[str],
     definition_of_done: list[str],
     prompt: str,
+    worktree_strategy: str = "isolated",
 ) -> dict[str, Any]:
     return {
         "id": subtask_id,
@@ -732,7 +733,7 @@ def _subtask_payload(
         "agent": agent,
         "model": model,
         "effort": effort,
-        "worktreeStrategy": "isolated",
+        "worktreeStrategy": worktree_strategy,
         "dependsOn": depends_on,
         "filesHint": files_hint,
         "prompt": prompt,
@@ -858,6 +859,7 @@ def _plan_code_change_tasks(
 ) -> list[dict[str, Any]]:
     subtasks: list[dict[str, Any]] = []
     dependency_chain: list[str] = []
+    worktree_strategy = "shared"
     phase_files = _phase_files(
         repo=repo,
         title=title,
@@ -905,6 +907,7 @@ def _plan_code_change_tasks(
                 files_hint=foundation_files,
                 definition_of_done=foundation_dod,
                 prompt=foundation_prompt,
+                worktree_strategy=worktree_strategy,
             )
         )
         dependency_chain = [foundation_id]
@@ -942,6 +945,7 @@ def _plan_code_change_tasks(
             files_hint=impl_files,
             definition_of_done=implementation_dod,
             prompt=implementation_prompt,
+            worktree_strategy=worktree_strategy,
         )
     )
     dependency_chain = [implementation_id]
@@ -980,6 +984,7 @@ def _plan_code_change_tasks(
                 files_hint=test_files,
                 definition_of_done=validation_dod,
                 prompt=validation_prompt,
+                worktree_strategy=worktree_strategy,
             )
         )
         dependency_chain = [validation_id]
@@ -1018,6 +1023,7 @@ def _plan_code_change_tasks(
                 files_hint=doc_files,
                 definition_of_done=docs_dod,
                 prompt=docs_prompt,
+                worktree_strategy=worktree_strategy,
             )
         )
 

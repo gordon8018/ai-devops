@@ -80,6 +80,10 @@ class TestContextInjector:
         assert injector.persist is False
         assert injector._cache == {}
 
+    def test_context_injector_persist_mode_supports_package_import(self):
+        injector = ContextInjector(persist=True)
+        assert injector.persist is True
+
     def test_get_shared_workspace_path(self):
         injector = ContextInjector(persist=False)
         path = injector.get_shared_workspace_path("plan-123")

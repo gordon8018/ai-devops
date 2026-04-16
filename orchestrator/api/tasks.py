@@ -57,7 +57,7 @@ def _error_response(message: str, status: int = 400) -> tuple[bytes, int, str]:
 
 def _parse_path(path: str) -> tuple[str, Optional[str]]:
     """Parse API path to extract resource and ID"""
-    parts = path.strip('/').split('/')
+    parts = path.split('?', 1)[0].strip('/').split('/')
     # Strict check: must be /api/tasks
     if len(parts) >= 2 and parts[0] == 'api' and parts[1] == 'tasks':
         task_id = parts[2] if len(parts) >= 3 else None
@@ -177,12 +177,7 @@ def create_tasks_handler(base_handler: type) -> type:
                 self.end_headers()
                 self.wfile.write(body)
             else:
-                # Send 404 for unrecognized paths
-                self.send_response(404)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(b'{"error": "Not Found", "success": false}')
+                super().do_GET()
         
         def do_POST(self):
             resource, resource_id = _parse_path(self.path)
@@ -207,8 +202,7 @@ def create_tasks_handler(base_handler: type) -> type:
                 self.end_headers()
                 self.wfile.write(body)
             else:
-                self.send_response(404)
-                self.end_headers()
+                super().do_DELETE()
         
         def do_OPTIONS(self):
             self.send_response(200)

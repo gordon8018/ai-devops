@@ -21,5 +21,5 @@ ai-devops-agent = "orchestrator.bin.agent:main"
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["orchestrator*"]
+include = ["orchestrator*", "packages*", "apps*"]
 exclude = ["tests*", "discord*", "openclaw-skills*"]

@@ -9,6 +9,7 @@ import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Tuple
+import sys
 
 try:
     from .config import ai_devops_home, logs_dir
@@ -86,6 +87,20 @@ except ImportError:
     def review_pr(task_id, pr_number, repo_dir):  # type: ignore[misc]
         print(f"[WARN] reviewer module not available, skipping review for PR #{pr_number}")
 
+try:
+    from orchestrator.api.events import get_event_manager
+except ImportError:
+    def get_event_manager():  # type: ignore[no-redef]
+        return None
+
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from packages.kernel.monitor.handlers import AgentDeathHandler, HandlerContext, StaleTaskHandler, TimeoutHandler
+from packages.kernel.monitor.handlers import PRCreatedHandler, ReadyStateHandler, RetryHandler
+
 
 def _obsidian_search(query: str) -> list[dict]:
     """搜索知识库上下文。未配置或不可达时返回空列表。"""
@@ -94,6 +109,18 @@ def _obsidian_search(query: str) -> list[dict]:
         return []
     client = ObsidianClient.from_env()
     return client.search(query, limit=2)
+
+
+def _emit_task_status_event(task_id: str | None, status: str | None, details: dict | None = None) -> None:
+    if not task_id or not status:
+        return
+    manager = get_event_manager()
+    if manager is None:
+        return
+    try:
+        manager.publish_task_status(task_id, status, details or {}, source="monitor")
+    except Exception as exc:
+        print(f"[WARN] Failed to emit task status event for {task_id}: {exc}")
 
 
 def _git_touched_files(worktree: Path) -> list[str]:
@@ -327,46 +354,40 @@ def _process_task(t: dict, notified_ready: set) -> None:
         t["status"] = "blocked"
         return
 
-    # === TIMEOUT CHECK ===
-    started_at = t.get("started_at") or t.get("startedAt")
-    last_activity = t.get("last_activity_at") or t.get("lastActivityAt")
-    timeout_minutes = t.get("timeout_minutes") or get_task_timeout(task_id=task_id, repo=t.get("repo"))
-    
-    if started_at and timeout_minutes:
-        now_ms = int(time.time() * 1000)
-        activity_time = last_activity or started_at
-        elapsed_minutes = (now_ms - activity_time) / 60000
-        
-        if elapsed_minutes > timeout_minutes:
-            update_task(task_id, {
-                "status": "timeout",
-                "completed_at": now_ms,
-                "note": f"Task exceeded timeout of {timeout_minutes} minutes (elapsed: {int(elapsed_minutes)} min)"
-            })
-            t["status"] = "timeout"
-            try:
-                alert_critical(
-                    title=f"Task Timeout: {task_id}",
-                    message=f"Task \"{t.get('title', 'unknown')}\" exceeded {timeout_minutes} min timeout (elapsed: {int(elapsed_minutes)} min). Repo: {t.get('repo', 'unknown')}"
-                )
-            except Exception as e:
-                print(f"[WARN] Failed to send timeout alert: {e}")
-            return
+    context = HandlerContext(
+        task=t,
+        update_task=update_task,
+        notify=notify,
+        now_ms=int(time.time() * 1000),
+        emit_event=lambda event_type, payload: (
+            _emit_task_status_event(
+                payload.get("task_id"),
+                payload.get("status"),
+                {k: v for k, v in payload.items() if k not in {"task_id", "status"}},
+            )
+            if event_type == "task_status"
+            else None
+        ),
+    )
+    if TimeoutHandler(
+        timeout_minutes_fn=lambda task: task.get("timeout_minutes") or get_task_timeout(task_id=task.get("id"), repo=task.get("repo"))
+    ).handle(context):
+        try:
+            timeout_minutes = t.get("timeout_minutes") or get_task_timeout(task_id=task_id, repo=t.get("repo"))
+            alert_critical(
+                title=f"Task Timeout: {task_id}",
+                message=f"Task \"{t.get('title', 'unknown')}\" exceeded {timeout_minutes} min timeout. Repo: {t.get('repo', 'unknown')}"
+            )
+        except Exception as e:
+            print(f"[WARN] Failed to send timeout alert: {e}")
+        return
 
-    # === STALE CHECK ===
-    # 检查任务是否超过 30 分钟无心跳
     try:
-        if check_stale(task_id, threshold_minutes=30):
-            update_task(task_id, {
-                "status": "log_stale",
-                "note": f"Task stale: no heartbeat for >30 minutes"
-            })
-            t["status"] = "log_stale"
+        if StaleTaskHandler(check_stale_fn=check_stale).handle(context):
             try:
                 alert_warning(
                     title=f"Task Stale: {task_id}",
-                    message=f"Task \"{t.get('title', 'unknown')}\" has no heartbeat for >30 minutes. "
-                            f"Repo: {t.get('repo', 'unknown')}. Check agent process."
+                    message=f"Task \"{t.get('title', 'unknown')}\" has no heartbeat for >30 minutes. Repo: {t.get('repo', 'unknown')}. Check agent process."
                 )
             except Exception as e:
                 print(f"[WARN] Failed to send stale alert: {e}")
@@ -374,11 +395,6 @@ def _process_task(t: dict, notified_ready: set) -> None:
     except Exception as e:
         print(f"[WARN] Stale check failed for {task_id}: {e}")
 
-
-    if execution_mode == "process":
-        alive = process_alive(process_id)
-    else:
-        alive = bool(session) and tmux_alive(session)
 
     scope_violation = _scope_violation(t, worktree, enforce_must_touch=False)
     if scope_violation:
@@ -394,20 +410,11 @@ def _process_task(t: dict, notified_ready: set) -> None:
     # 1) PR info
     pr = pr_info(worktree, branch)
 
-    if pr and t.get("status") == "running":
-        update_task(task_id, {
-            "status": "pr_created",
-            "pr_number": pr.get("number"),
-            "pr_url": pr.get("url"),
-        })
-        t["status"] = "pr_created"
-        t["pr"] = pr.get("number")
-        t["prUrl"] = pr.get("url")
-
-        # 异步触发 PR 评审（非阻塞）
-        worktree_path = Path(t.get("worktree", ""))
-        if worktree_path.exists() and pr.get("number"):
-            review_pr(task_id, pr["number"], worktree_path)
+    if pr:
+        handled_pr_created = PRCreatedHandler(review_pr_fn=review_pr).handle(context, pr)
+        if handled_pr_created:
+            t["pr"] = pr.get("number")
+            t["prUrl"] = pr.get("url")
 
     if not pr:
         exit_info = load_exit_status(task_id)
@@ -449,20 +456,9 @@ def _process_task(t: dict, notified_ready: set) -> None:
             return
 
         # 在 PR 生成前才依赖运行时存活判断。
-        if not alive and t.get("status") == "running":
-            note = (
-                "background process not found"
-                if execution_mode == "process"
-                else "tmux session not found"
-            )
-            update_task(task_id, {"status": "agent_dead", "note": note})
-            t["status"] = "agent_dead"
-            runtime_ref = (
-                f"pid={process_id}" if execution_mode == "process" else session
-            )
-            notify(
-                f"⚠️ Agent session dead: `{task_id}` ({runtime_ref}). Check logs."
-            )
+        if AgentDeathHandler(process_alive_fn=process_alive, tmux_alive_fn=tmux_alive).handle(context):
+            runtime_ref = f"pid={process_id}" if execution_mode == "process" else session
+            notify(f"⚠️ Agent session dead: `{task_id}` ({runtime_ref}). Check logs.")
         return
 
     # 3) Only handle OPEN PRs for checks/retry
@@ -491,21 +487,11 @@ def _process_task(t: dict, notified_ready: set) -> None:
                 f"Touched: {', '.join(touched[:8])}"
             )
             return
-        if task_id not in notified_ready:
-            notified_ready.add(task_id)
-            update_task(task_id, {
-                "status": "ready",
-                "completed_at": int(time.time() * 1000),
-                "note": "checks passed and mergeable clean",
-            })
-            t["status"] = "ready"
-            _save_success_pattern(
-                repo=t.get("repo", ""),
-                task_id=task_id,
-                title=t.get("title", task_id),
-                worktree=worktree,
-                attempts=int(t.get("attempts", 0)),
-            )
+        if ReadyStateHandler(save_success_pattern_fn=_save_success_pattern).handle(
+            context,
+            notified_ready=notified_ready,
+            worktree=worktree,
+        ):
             notify(f"✅ PR ready: `{task_id}` {t.get('prUrl') or t.get('pr_url', '')} (checks✅ + merge✅)")
         return
 
@@ -524,53 +510,32 @@ def _process_task(t: dict, notified_ready: set) -> None:
 
     # 4) 检查失败 -> Ralph Loop v2 自动重试
     if fail_summary:
-        attempts = int(t.get("attempts", 0))
-        max_attempts = int(t.get("maxAttempts") or t.get("max_attempts", 3))
-
         update_task(task_id, {"last_failure": fail_summary})
+        try:
+            handled_retry = RetryHandler(
+                write_failure_log_fn=_write_failure_log,
+                latest_run_failure_fn=latest_run_failure,
+                build_retry_prompt_fn=_build_retry_prompt,
+                restart_agent_fn=restart_agent,
+            ).handle(context, fail_summary=fail_summary)
+        except Exception as e:
+            update_task(task_id, {"status": "blocked", "note": f"failed to restart agent: {e}"})
+            t["status"] = "blocked"
+            _emit_task_status_event(task_id, "blocked", {"reason": "restart_failed"})
+            notify(f"🛑 Failed to restart agent for `{task_id}`: {e}")
+            return
 
-        if attempts >= max_attempts:
-            if t.get("status") != "blocked":
-                update_task(task_id, {"status": "blocked", "note": "max retries reached"})
-                t["status"] = "blocked"
+        if handled_retry:
+            if t.get("status") == "blocked":
                 notify(
                     f"🛑 CI failed and max retries reached: `{task_id}` {t.get('prUrl') or t.get('pr_url', '')}\n"
                     f"Fail: {fail_summary}"
                 )
-            return
-
-        retry_n = attempts + 1
-
-        # 尽可能拉取更多 CI 失败细节
-        ci_detail = latest_run_failure(worktree, branch) or ""
-
-        # 写入失败日志
-        _write_failure_log(t.get("repo", ""), task_id, fail_summary, ci_detail)
-
-        # 构建带 Obsidian 上下文的重试提示词
-        retry_prompt_path = _build_retry_prompt(t, retry_n, fail_summary, ci_detail)
-
-        # 使用重试提示词重启 agent
-        try:
-            restart_agent(t, worktree, retry_prompt_path.name)
-        except Exception as e:
-            update_task(task_id, {"status": "blocked", "note": f"failed to restart agent: {e}"})
-            t["status"] = "blocked"
-            notify(f"🛑 Failed to restart agent for `{task_id}`: {e}")
-            return
-
-        update_task(task_id, {
-            "attempts": retry_n,
-            "status": "running",
-            "note": f"retry #{retry_n} triggered",
-        })
-        t["attempts"] = retry_n
-        t["status"] = "running"
-
-        notify(
-            f"🔁 Retry #{retry_n} triggered: `{task_id}` {t.get('prUrl') or t.get('pr_url', '')}\n"
-            f"Fail: {fail_summary}"
-        )
+            else:
+                notify(
+                    f"🔁 Retry #{t.get('attempts')} triggered: `{task_id}` {t.get('prUrl') or t.get('pr_url', '')}\n"
+                    f"Fail: {fail_summary}"
+                )
 
 
 def check_all_tasks(notified_ready: set) -> Tuple[bool, set]:

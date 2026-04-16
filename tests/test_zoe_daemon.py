@@ -160,5 +160,47 @@ class TestShCommand(unittest.TestCase):
             self.assertEqual(result, "")
 
 
+class TestMainBootstrap(unittest.TestCase):
+    def setUp(self):
+        self.zoe_daemon = load_zoe_daemon_module()
+
+    def test_main_configures_control_plane_dual_write(self):
+        consumer = MagicMock()
+        consumer.list_queue_files.return_value = []
+        control_plane_store = MagicMock()
+
+        with patch.object(self.zoe_daemon, "init_db") as mock_init_db, \
+             patch.object(self.zoe_daemon, "configure_control_plane_dual_write", return_value=control_plane_store) as mock_configure, \
+             patch.object(self.zoe_daemon, "configure_runtime_persistence") as mock_configure_runtime_persistence, \
+             patch.object(self.zoe_daemon, "start_api_server"), \
+             patch.object(self.zoe_daemon, "ProcessGuardian") as mock_guardian_cls, \
+             patch.object(self.zoe_daemon, "ReleaseWorker") as mock_release_worker_cls, \
+             patch.object(self.zoe_daemon, "IncidentWorker") as mock_incident_worker_cls, \
+             patch.object(self.zoe_daemon, "get_event_manager") as mock_get_event_manager, \
+             patch.object(self.zoe_daemon, "QueueConsumer", return_value=consumer), \
+             patch.object(self.zoe_daemon, "queue_dir", return_value=Path(tempfile.mkdtemp())), \
+             patch.object(self.zoe_daemon, "get_global_scheduler") as mock_get_scheduler, \
+             patch.object(self.zoe_daemon, "get_running_tasks", return_value=[]), \
+             patch.object(self.zoe_daemon, "time") as mock_time:
+            mock_guardian_cls.return_value = MagicMock(check_all=MagicMock(return_value={}))
+            release_worker = MagicMock()
+            mock_release_worker_cls.return_value = release_worker
+            incident_worker = MagicMock()
+            mock_incident_worker_cls.return_value = incident_worker
+            mock_get_event_manager.return_value = MagicMock()
+            mock_get_scheduler.return_value = MagicMock(schedule=MagicMock(return_value=[]))
+            mock_time.time.return_value = 999999999
+            mock_time.sleep.side_effect = KeyboardInterrupt()
+
+            with self.assertRaises(KeyboardInterrupt):
+                self.zoe_daemon.main()
+
+        mock_init_db.assert_called_once()
+        mock_configure.assert_called_once_with()
+        mock_configure_runtime_persistence.assert_called_once_with(store=control_plane_store)
+        release_worker.start.assert_called_once_with()
+        incident_worker.start.assert_called_once_with()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,7 +20,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from collections import defaultdict
 
 try:
@@ -53,6 +53,12 @@ try:
     from .status_propagator import StatusPropagator, get_status_propagator
 except ImportError:
     from status_propagator import StatusPropagator, get_status_propagator
+
+try:
+    from orchestrator.api.events import get_event_manager
+except ImportError:
+    def get_event_manager():  # type: ignore[no-redef]
+        return None
 
 
 @dataclass
@@ -111,15 +117,45 @@ class GlobalScheduler:
     - Decision logging for observability
     """
 
-    def __init__(self, config: Optional[SchedulerConfig] = None):
+    def __init__(
+        self,
+        config: Optional[SchedulerConfig] = None,
+        event_publisher: Optional[Callable[[str, dict[str, Any]], None]] = None,
+    ):
         self.config = config or SchedulerConfig()
+        self.event_publisher = event_publisher or self._default_event_publisher
         self._decision_log: list[SchedulingDecision] = []
         self._last_scheduling_time = 0
         init_db()
 
+    def _default_event_publisher(self, event_type: str, payload: dict[str, Any]) -> None:
+        manager = get_event_manager()
+        if manager is None:
+            return
+        if event_type == "plan_status":
+            manager.publish_plan_status(
+                str(payload.get("plan_id") or ""),
+                str(payload.get("status") or ""),
+                {
+                    "reason": payload.get("reason"),
+                    "priority": payload.get("priority"),
+                },
+                source="global_scheduler",
+            )
+
     def _log_decision(self, decision: SchedulingDecision) -> None:
         """Log a scheduling decision."""
         self._decision_log.append(decision)
+        if self.event_publisher:
+            self.event_publisher(
+                "plan_status",
+                {
+                    "plan_id": decision.plan_id,
+                    "status": decision.decision,
+                    "reason": decision.reason,
+                    "priority": decision.priority,
+                },
+            )
         
         if not self.config.log_decisions:
             return

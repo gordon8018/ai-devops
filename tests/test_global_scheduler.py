@@ -76,6 +76,44 @@ class TestGlobalScheduler(unittest.TestCase):
         scheduler = GlobalScheduler()
         self.assertIsNotNone(scheduler.config)
         self.assertEqual(len(scheduler._decision_log), 0)
+
+    def test_log_decision_emits_event(self):
+        publisher = MagicMock()
+        scheduler = GlobalScheduler(event_publisher=publisher)
+        decision = SchedulingDecision(
+            plan_id="plan1",
+            decision="dispatched",
+            reason="Dependencies met",
+            timestamp=1234567890,
+            priority=5,
+        )
+        scheduler._log_decision(decision)
+        publisher.assert_called_once_with(
+            "plan_status",
+            {"plan_id": "plan1", "status": "dispatched", "reason": "Dependencies met", "priority": 5},
+        )
+
+    @patch("orchestrator.bin.global_scheduler.get_event_manager")
+    def test_log_decision_uses_default_event_manager_publisher(self, mock_get_event_manager):
+        manager = MagicMock()
+        mock_get_event_manager.return_value = manager
+        scheduler = GlobalScheduler()
+        decision = SchedulingDecision(
+            plan_id="plan2",
+            decision="blocked",
+            reason="Waiting for dependencies",
+            timestamp=1234567890,
+            priority=3,
+        )
+
+        scheduler._log_decision(decision)
+
+        manager.publish_plan_status.assert_called_once_with(
+            "plan2",
+            "blocked",
+            {"reason": "Waiting for dependencies", "priority": 3},
+            source="global_scheduler",
+        )
     
     def test_get_pending_plans_empty(self):
         scheduler = GlobalScheduler()

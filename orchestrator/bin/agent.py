@@ -26,8 +26,10 @@ from typing import Optional
 
 # 路径初始化
 SCRIPT_DIR = Path(__file__).parent.absolute()
+REPO_ROOT = SCRIPT_DIR.parent.parent
 
-# 添加 orchestrator 到导入路径
+# 添加 repo root 和 orchestrator/bin 到导入路径
+sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from db import (

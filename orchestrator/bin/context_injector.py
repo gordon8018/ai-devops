@@ -71,7 +71,10 @@ class ContextInjector:
         self.persist = persist
         self._cache: Dict[str, Any] = {}
         if self.persist:
-            from db import get_plan, get_task
+            try:
+                from .db import get_plan, get_task
+            except ImportError:
+                from db import get_plan, get_task
     
     def get_shared_workspace_path(self, plan_id: str) -> Path:
         """获取共享工作区路径"""

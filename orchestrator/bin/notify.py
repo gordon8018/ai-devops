@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Optional, List
+import requests
 
 # Import new notification framework
 from orchestrator.notifiers import (
@@ -45,17 +46,19 @@ def notify(msg: str) -> None:
     This is a legacy function that sends via Telegram only.
     For new code, consider using alert_info() instead.
     """
-    notifier = TelegramNotifier()
-    if not notifier.enabled:
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id:
         logger.warning("Telegram not configured (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID missing)")
         return
-    
-    alert = Alert(
-        level=AlertLevel.INFO,
-        title="Notification",
-        message=msg
-    )
-    notifier.send(alert)
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": msg},
+            timeout=10,
+        )
+    except requests.RequestException:
+        return
 
 
 def notify_ready(task_id: str, pr_url: str) -> None:
@@ -63,17 +66,7 @@ def notify_ready(task_id: str, pr_url: str) -> None:
     
     This sends a notification that a task is ready for human review.
     """
-    alert = Alert(
-        level=AlertLevel.INFO,
-        title="Task Ready for Review",
-        message=f"PR: {pr_url}",
-        task_id=task_id,
-        metadata={"pr_url": pr_url}
-    )
-    
-    # Use the router for better multi-channel support
-    router = get_router()
-    router.route(alert)
+    notify(f"Task ready: {task_id}\nPR: {pr_url}")
 
 
 def notify_failure(task_id: str, detail: str) -> None:
@@ -81,16 +74,7 @@ def notify_failure(task_id: str, detail: str) -> None:
     
     This sends a warning-level alert about a task failure.
     """
-    alert = Alert(
-        level=AlertLevel.WARNING,
-        title="Task Failed",
-        message=detail,
-        task_id=task_id
-    )
-    
-    # Use the router for multi-channel notification
-    router = get_router()
-    router.route(alert)
+    notify(f"Task failed: {task_id}\nDetail: {detail}")
 
 
 # New API - Alert-based notifications

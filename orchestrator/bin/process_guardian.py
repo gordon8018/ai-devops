@@ -16,12 +16,18 @@ from typing import Optional, Callable
 
 try:
     from .tmux_manager import TmuxManager
-    from .db import get_running_tasks, update_task, get_task
+    from .db import get_running_tasks, update_task, get_task, init_db
     from .recovery_state_machine import RecoveryStateMachine, RecoveryState, RecoveryConfig
 except ImportError:
     from tmux_manager import TmuxManager
-    from db import get_running_tasks, update_task, get_task
+    from db import get_running_tasks, update_task, get_task, init_db
     from recovery_state_machine import RecoveryStateMachine, RecoveryState, RecoveryConfig
+
+try:
+    from orchestrator.api.events import get_event_manager
+except ImportError:
+    def get_event_manager():  # type: ignore[no-redef]
+        return None
 
 
 logger = logging.getLogger("process_guardian")
@@ -69,11 +75,14 @@ class ProcessGuardian:
         check_interval: float = DEFAULT_CHECK_INTERVAL,
         on_restart: Optional[Callable[[str, str], None]] = None,
         on_max_restarts: Optional[Callable[[str, int], None]] = None,
+        event_publisher: Optional[Callable[[str, dict], None]] = None,
     ):
+        init_db()
         self.policy = policy or RestartPolicy()
         self.check_interval = check_interval
         self.on_restart = on_restart  # 回调: (task_id, session_name)
         self.on_max_restarts = on_max_restarts  # 回调: (task_id, restart_count)
+        self.event_publisher = event_publisher or self._default_event_publisher
         
         self._monitors: dict[str, TaskMonitorState] = {}
         self._last_global_check: float = 0
@@ -123,6 +132,18 @@ class ProcessGuardian:
             "[%(levelname)s] %(message)s"
         ))
         logger.addHandler(console_handler)
+
+    def _default_event_publisher(self, event_type: str, payload: dict) -> None:
+        manager = get_event_manager()
+        if manager is None:
+            return
+        if event_type == "task_status":
+            manager.publish_task_status(
+                str(payload.get("task_id") or ""),
+                str(payload.get("status") or ""),
+                {"restart_count": payload.get("restart_count")},
+                source="process_guardian",
+            )
     
     def _get_session_name(self, task: dict) -> Optional[str]:
         """从任务记录中提取 tmux 会话名"""
@@ -329,6 +350,15 @@ class ProcessGuardian:
             
             if self.on_restart:
                 self.on_restart(task_id, monitor.session_name)
+            if self.event_publisher:
+                self.event_publisher(
+                    "task_status",
+                    {
+                        "task_id": task_id,
+                        "status": "restarted",
+                        "restart_count": monitor.restart_count,
+                    },
+                )
             
             return {
                 "status": "restarted",

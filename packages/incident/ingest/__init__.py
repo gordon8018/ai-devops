@@ -1,0 +1,1 @@
+"""Incident ingest package placeholder."""
