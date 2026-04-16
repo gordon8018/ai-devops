@@ -95,6 +95,92 @@ def test_release_worker_rolls_back_on_guardrail_breach() -> None:
     worker.stop()
 
 
+def test_release_worker_advance_moves_stage_to_full_and_marks_succeeded() -> None:
+    event_manager = EventManager()
+    event_manager.clear_history()
+    flag_adapter = RecordingFlagAdapter()
+    worker = ReleaseWorker(event_manager=event_manager, flag_adapter=flag_adapter)
+    worker.start()
+
+    event_manager.publish(
+        Event(
+            event_type=EventType.TASK_STATUS,
+            data={
+                "task_id": "wi_advance",
+                "status": "ready",
+                "details": {"work_item_id": "wi_advance"},
+            },
+            source="test",
+        )
+    )
+
+    for _ in range(5):
+        worker.advance("wi_advance")
+
+    release = worker.get_release("wi_advance")
+
+    assert release is not None
+    assert release["stage"] == "full"
+    assert release["status"] == "succeeded"
+    assert flag_adapter.applied == [
+        ("rel_wi_advance", "team-only"),
+        ("rel_wi_advance", "beta"),
+        ("rel_wi_advance", "1%"),
+        ("rel_wi_advance", "5%"),
+        ("rel_wi_advance", "20%"),
+        ("rel_wi_advance", "full"),
+    ]
+    worker.stop()
+
+
+def test_release_worker_advance_is_noop_after_rollback() -> None:
+    event_manager = EventManager()
+    event_manager.clear_history()
+    flag_adapter = RecordingFlagAdapter()
+    worker = ReleaseWorker(event_manager=event_manager, flag_adapter=flag_adapter)
+    worker.start()
+
+    event_manager.publish(
+        Event(
+            event_type=EventType.TASK_STATUS,
+            data={
+                "task_id": "wi_rb",
+                "status": "ready",
+                "details": {"work_item_id": "wi_rb"},
+            },
+            source="test",
+        )
+    )
+    event_manager.publish(
+        Event(
+            event_type=EventType.SYSTEM,
+            data={
+                "type": "guardrail_breach",
+                "work_item_id": "wi_rb",
+                "guardrails": {"error_rate": 0.07},
+                "thresholds": {"error_rate": 0.05},
+            },
+            source="test",
+        )
+    )
+
+    worker.advance("wi_rb")
+
+    release = worker.get_release("wi_rb")
+
+    assert release is not None
+    assert release["status"] == "rolled_back"
+    assert release["stage"] == "team-only"
+    worker.stop()
+
+
+def test_release_worker_advance_returns_none_for_unknown_work_item() -> None:
+    worker = ReleaseWorker(event_manager=EventManager(), flag_adapter=RecordingFlagAdapter())
+    worker.start()
+    assert worker.advance("wi_does_not_exist") is None
+    worker.stop()
+
+
 def test_release_worker_reads_releases_from_persistent_store_across_instances() -> None:
     store = InMemoryReleaseStore()
     event_manager = EventManager()

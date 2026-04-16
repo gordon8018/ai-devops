@@ -70,6 +70,37 @@ class ReleaseWorker:
                 return releases
         return list(self._releases.values())
 
+    def advance(self, work_item_id: str) -> dict[str, Any] | None:
+        release = self.get_release(work_item_id)
+        if release is None:
+            return None
+        if release.get("status") in {"rolled_back", "succeeded"}:
+            return release
+
+        current_stage = release.get("stage") or "unknown"
+        next_stage = self._rollout_controller.next_stage(current_stage)
+        release["stage"] = next_stage
+        if next_stage == "full":
+            release["status"] = "succeeded"
+
+        self._releases[work_item_id] = release
+        store = self._store()
+        if store is not None and hasattr(store, "save_release"):
+            store.save_release(release)
+        self._flag_adapter.apply_stage(release["releaseId"], next_stage)
+
+        action = "release_succeeded" if release["status"] == "succeeded" else "release_stage_advanced"
+        record_audit_event(
+            AuditEvent(
+                audit_event_id=f"ae_{release['releaseId']}_{action}_{int(time.time() * 1000)}",
+                entity_type="release",
+                entity_id=release["releaseId"],
+                action=action,
+                payload={"workItemId": work_item_id, "stage": next_stage},
+            )
+        )
+        return release
+
     def _handle_event(self, event: Event) -> None:
         if event.event_type is EventType.TASK_STATUS:
             self._handle_task_status(event.data)
