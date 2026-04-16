@@ -270,3 +270,9 @@ def test_work_item_from_legacy_task_input_preserves_dedup_key() -> None:
     )
     assert work_item_absent.dedup_key is None
     assert work_item_absent.to_dict()["dedupKey"] is None
+
+
+def test_shared_domain_exports_context_pack_provider_protocol() -> None:
+    from packages.shared import domain as shared_domain
+
+    assert hasattr(shared_domain, "ContextPackProvider")

@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from orchestrator.bin.zoe_tools import build_plan_request
-from packages.context.packer.service import ContextPackAssembler
 from packages.kernel.events.bus import InMemoryEventBus
 from packages.shared.domain.models import (
     AgentRun,
@@ -15,6 +14,7 @@ from packages.shared.domain.models import (
     WorkItem,
     WorkItemStatus,
 )
+from packages.shared.domain.protocols import ContextPackProvider
 
 
 class MissingContextPackError(ValueError):
@@ -39,10 +39,14 @@ class WorkItemService:
         self,
         *,
         event_bus: InMemoryEventBus | None = None,
-        context_assembler: ContextPackAssembler | None = None,
+        context_assembler: ContextPackProvider | None = None,
     ) -> None:
         self._event_bus = event_bus or InMemoryEventBus()
-        self._context_assembler = context_assembler or ContextPackAssembler()
+        if context_assembler is None:
+            from packages.context.packer.service import ContextPackAssembler
+
+            context_assembler = ContextPackAssembler()
+        self._context_assembler = context_assembler
 
     @property
     def event_bus(self) -> InMemoryEventBus:

@@ -13,12 +13,14 @@ from .models import (
     WorkItemStatus,
     WorkItemType,
 )
+from .protocols import ContextPackProvider
 
 __all__ = [
     "AgentRun",
     "AgentRunStatus",
     "AuditEvent",
     "ContextPack",
+    "ContextPackProvider",
     "EvalRun",
     "EvalRunStatus",
     "QualityRun",
