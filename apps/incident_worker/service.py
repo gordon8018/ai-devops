@@ -115,6 +115,15 @@ class IncidentWorker:
                     payload={"severity": incident["severity"], "message": message},
                 )
             )
+        else:
+            # PR-0.4: first non-null identity value wins and sticks. If a later
+            # alert finally carries sourceSystem / dedupKey while the existing
+            # incident has None, backfill — but never overwrite an already-set
+            # value even if the new alert brings a different one.
+            if source_system is not None and not incident.get("sourceSystem"):
+                incident["sourceSystem"] = source_system
+            if dedup_key is not None and not incident.get("dedupKey"):
+                incident["dedupKey"] = dedup_key
         incident["occurrenceCount"] += 1
         store = self._store()
         if store is not None and hasattr(store, "save_incident"):

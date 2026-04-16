@@ -161,3 +161,90 @@ def test_incident_worker_sets_source_system_and_dedup_key_to_none_when_absent() 
     assert incident["sourceSystem"] is None
     assert incident["dedupKey"] is None
     worker.stop()
+
+
+def test_incident_worker_backfills_source_system_and_dedup_key_on_later_alert() -> None:
+    store = InMemoryIncidentStore()
+    event_manager = EventManager()
+    event_manager.clear_history()
+    worker = IncidentWorker(event_manager=event_manager, persistence_store=store)
+    worker.start()
+
+    # First alert: identity fields missing — incident created with None values
+    event_manager.publish(
+        Event(
+            event_type=EventType.ALERT,
+            data={
+                "level": "error",
+                "message": "Checkout timeout in payment service",
+            },
+            source="test",
+        )
+    )
+
+    # Second alert, same fingerprint: identity fields now present
+    event_manager.publish(
+        Event(
+            event_type=EventType.ALERT,
+            data={
+                "level": "error",
+                "message": "Checkout timeout in payment service",
+                "sourceSystem": "sentry",
+                "dedupKey": "sentry-event-99",
+            },
+            source="test",
+        )
+    )
+
+    incident = worker.list_incidents()[0]
+
+    assert incident["occurrenceCount"] == 2
+    assert incident["sourceSystem"] == "sentry"
+    assert incident["dedupKey"] == "sentry-event-99"
+    # Store also reflects the backfilled values
+    stored = store.get_incident(incident["incidentId"])
+    assert stored is not None
+    assert stored["sourceSystem"] == "sentry"
+    assert stored["dedupKey"] == "sentry-event-99"
+    worker.stop()
+
+
+def test_incident_worker_does_not_overwrite_existing_source_system_or_dedup_key() -> None:
+    """First non-null value wins and sticks; a later alert with different
+    sourceSystem/dedupKey must NOT overwrite the already-set identity fields."""
+    event_manager = EventManager()
+    event_manager.clear_history()
+    worker = IncidentWorker(event_manager=event_manager)
+    worker.start()
+
+    event_manager.publish(
+        Event(
+            event_type=EventType.ALERT,
+            data={
+                "level": "error",
+                "message": "Checkout timeout in payment service",
+                "sourceSystem": "sentry",
+                "dedupKey": "sentry-first",
+            },
+            source="test",
+        )
+    )
+    event_manager.publish(
+        Event(
+            event_type=EventType.ALERT,
+            data={
+                "level": "error",
+                "message": "Checkout timeout in payment service",
+                "sourceSystem": "datadog",
+                "dedupKey": "datadog-second",
+            },
+            source="test",
+        )
+    )
+
+    incident = worker.list_incidents()[0]
+
+    assert incident["occurrenceCount"] == 2
+    assert incident["sourceSystem"] == "sentry"
+    assert incident["dedupKey"] == "sentry-first"
+    worker.stop()
