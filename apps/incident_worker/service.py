@@ -9,6 +9,7 @@ from packages.incident.verify.service import VerifyEngine
 from packages.shared.domain.control_plane import ensure_control_plane_store
 from packages.shared.domain.models import AuditEvent
 from packages.shared.domain.runtime_state import record_audit_event
+from packages.shared.mutation import MutationService
 
 _GLOBAL_INCIDENT_WORKER: "IncidentWorker | None" = None
 
@@ -23,11 +24,14 @@ class IncidentWorker:
         triage_engine: TriageEngine | None = None,
         verify_engine: VerifyEngine | None = None,
         persistence_store: Any | None = None,
+        audit_recorder: Callable[[AuditEvent], None] | None = None,
     ) -> None:
         self._event_manager = event_manager
         self._triage_engine = triage_engine or TriageEngine()
         self._verify_engine = verify_engine or VerifyEngine()
         self._persistence_store = persistence_store or ensure_control_plane_store()
+        self._audit_recorder = audit_recorder or record_audit_event
+        self._mutations = MutationService()
         self._incidents: dict[str, dict[str, Any]] = {}
         self._unsubscribe: Callable[[], None] | None = None
 
@@ -67,6 +71,26 @@ class IncidentWorker:
                 return incident
         return self._incidents.get(incident_id)
 
+    def _persist_incident(self, incident_id: str, incident: dict[str, Any]) -> None:
+        snapshot = dict(incident)
+        self._incidents[incident_id] = snapshot
+        store = self._store()
+        if store is not None and hasattr(store, "save_incident"):
+            store.save_incident(snapshot)
+
+    def _rollback_incident(self, incident_id: str, previous_incident: dict[str, Any] | None) -> None:
+        store = self._store()
+        if previous_incident is None:
+            self._incidents.pop(incident_id, None)
+            if store is not None and hasattr(store, "delete_incident"):
+                store.delete_incident(incident_id)
+            return
+
+        restored = dict(previous_incident)
+        self._incidents[incident_id] = restored
+        if store is not None and hasattr(store, "save_incident"):
+            store.save_incident(restored)
+
     def _handle_event(self, event: Event) -> None:
         if event.event_type is EventType.ALERT:
             self._ingest_alert(event.data)
@@ -99,42 +123,44 @@ class IncidentWorker:
                     message=message,
                 ),
                 "status": "open",
-                "occurrenceCount": 0,
+                "occurrenceCount": 1,
                 "details": payload.get("details") or {},
                 "sourceSystem": source_system,
                 "dedupKey": dedup_key,
             }
-            self._incidents[incident_id] = incident
-            store = self._store()
-            if store is not None and hasattr(store, "save_incident"):
-                store.save_incident(incident)
-            record_audit_event(
-                AuditEvent(
-                    audit_event_id=f"ae_{incident_id}_opened_{int(time.time() * 1000)}",
-                    entity_type="incident",
-                    entity_id=incident_id,
-                    action="incident_opened",
-                    payload={"severity": incident["severity"], "message": message},
-                    actor_id="system:incident_worker",
-                    actor_type="system",
-                )
+            self._mutations.apply(
+                persist=lambda: self._persist_incident(incident_id, incident),
+                audit=lambda: self._audit_recorder(
+                    AuditEvent(
+                        audit_event_id=f"ae_{incident_id}_opened_{int(time.time() * 1000)}",
+                        entity_type="incident",
+                        entity_id=incident_id,
+                        action="incident_opened",
+                        payload={"severity": incident["severity"], "message": message},
+                        actor_id="system:incident_worker",
+                        actor_type="system",
+                    )
+                ),
+                rollback=lambda: self._rollback_incident(incident_id, None),
             )
-        else:
-            # PR-0.4: first non-null identity value wins and sticks. If a later
-            # alert finally carries sourceSystem / dedupKey while the existing
-            # incident has None, backfill — but never overwrite an already-set
-            # value even if the new alert brings a different one.
-            if source_system is not None and not incident.get("sourceSystem"):
-                incident["sourceSystem"] = source_system
-            if dedup_key is not None and not incident.get("dedupKey"):
-                incident["dedupKey"] = dedup_key
-            # Keep the in-memory cache coherent with the (possibly store-fetched)
-            # incident so subsequent operations see the mutated copy.
-            self._incidents[incident_id] = incident
-        incident["occurrenceCount"] += 1
-        store = self._store()
-        if store is not None and hasattr(store, "save_incident"):
-            store.save_incident(incident)
+            return
+
+        previous_incident = dict(incident)
+        updated_incident = dict(incident)
+        # PR-0.4: first non-null identity value wins and sticks. If a later
+        # alert finally carries sourceSystem / dedupKey while the existing
+        # incident has None, backfill — but never overwrite an already-set
+        # value even if the new alert brings a different one.
+        if source_system is not None and not updated_incident.get("sourceSystem"):
+            updated_incident["sourceSystem"] = source_system
+        if dedup_key is not None and not updated_incident.get("dedupKey"):
+            updated_incident["dedupKey"] = dedup_key
+        updated_incident["occurrenceCount"] = int(updated_incident.get("occurrenceCount") or 0) + 1
+        self._mutations.apply(
+            persist=lambda: self._persist_incident(incident_id, updated_incident),
+            audit=lambda: None,
+            rollback=lambda: self._rollback_incident(incident_id, previous_incident),
+        )
 
     def _verify_incident(self, payload: dict[str, Any]) -> None:
         if payload.get("type") != "incident_verify":
@@ -146,21 +172,23 @@ class IncidentWorker:
         if incident is None:
             return
         if self._verify_engine.should_close(resolved=bool(payload.get("resolved"))):
-            incident["status"] = "closed"
-            self._incidents[incident_id] = incident
-            store = self._store()
-            if store is not None and hasattr(store, "save_incident"):
-                store.save_incident(incident)
-            record_audit_event(
-                AuditEvent(
-                    audit_event_id=f"ae_{incident_id}_closed_{int(time.time() * 1000)}",
-                    entity_type="incident",
-                    entity_id=incident_id,
-                    action="incident_closed",
-                    payload={"resolved": True},
-                    actor_id="system:incident_worker",
-                    actor_type="system",
-                )
+            previous_incident = dict(incident)
+            updated_incident = dict(incident)
+            updated_incident["status"] = "closed"
+            self._mutations.apply(
+                persist=lambda: self._persist_incident(incident_id, updated_incident),
+                audit=lambda: self._audit_recorder(
+                    AuditEvent(
+                        audit_event_id=f"ae_{incident_id}_closed_{int(time.time() * 1000)}",
+                        entity_type="incident",
+                        entity_id=incident_id,
+                        action="incident_closed",
+                        payload={"resolved": True},
+                        actor_id="system:incident_worker",
+                        actor_type="system",
+                    )
+                ),
+                rollback=lambda: self._rollback_incident(incident_id, previous_incident),
             )
 
 

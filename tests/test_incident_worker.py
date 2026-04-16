@@ -19,6 +19,20 @@ class InMemoryIncidentStore:
     def list_incidents(self) -> list[dict]:
         return [dict(incident) for incident in self.incidents.values()]
 
+    def delete_incident(self, incident_id: str) -> None:
+        self.incidents.pop(incident_id, None)
+
+
+class FailOnUpdateIncidentStore(InMemoryIncidentStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self._fail_on_existing = False
+
+    def save_incident(self, incident: dict) -> None:
+        if self._fail_on_existing and incident["incidentId"] in self.incidents:
+            raise RuntimeError("save incident update failed")
+        super().save_incident(incident)
+
 
 def test_incident_worker_clusters_duplicate_alerts_into_one_incident() -> None:
     clear_runtime_state()
@@ -354,3 +368,128 @@ def test_incident_worker_does_not_overwrite_existing_source_system_or_dedup_key(
     assert incident["sourceSystem"] == "sentry"
     assert incident["dedupKey"] == "sentry-first"
     worker.stop()
+
+
+def test_incident_worker_does_not_persist_incident_when_open_audit_fails() -> None:
+    clear_runtime_state()
+    store = InMemoryIncidentStore()
+    event_manager = EventManager()
+    event_manager.clear_history()
+    worker = IncidentWorker(
+        event_manager=event_manager,
+        persistence_store=store,
+        audit_recorder=lambda _event: (_ for _ in ()).throw(RuntimeError("audit failed")),
+    )
+    worker.start()
+
+    event_manager.publish(
+        Event(
+            event_type=EventType.ALERT,
+            data={
+                "level": "error",
+                "message": "Checkout timeout in payment service",
+            },
+            source="test",
+        )
+    )
+
+    assert worker.list_incidents() == []
+    assert store.list_incidents() == []
+    assert list_audit_events() == []
+    worker.stop()
+    clear_runtime_state()
+
+
+def test_incident_worker_keeps_incident_open_when_close_audit_fails() -> None:
+    clear_runtime_state()
+    store = InMemoryIncidentStore()
+    event_manager = EventManager()
+    event_manager.clear_history()
+
+    def conditional_audit(event) -> None:
+        if event.action == "incident_closed":
+            raise RuntimeError("close audit failed")
+
+    worker = IncidentWorker(
+        event_manager=event_manager,
+        persistence_store=store,
+        audit_recorder=conditional_audit,
+    )
+    worker.start()
+    event_manager.publish(
+        Event(
+            event_type=EventType.ALERT,
+            data={
+                "level": "error",
+                "message": "Checkout timeout in payment service",
+            },
+            source="test",
+        )
+    )
+    incident = worker.list_incidents()[0]
+
+    event_manager.publish(
+        Event(
+            event_type=EventType.SYSTEM,
+            data={"type": "incident_verify", "incident_id": incident["incidentId"], "resolved": True},
+            source="test",
+        )
+    )
+
+    updated = worker.get_incident(incident["incidentId"])
+    assert updated is not None
+    assert updated["status"] == "open"
+    stored = store.get_incident(incident["incidentId"])
+    assert stored is not None
+    assert stored["status"] == "open"
+    worker.stop()
+    clear_runtime_state()
+
+
+def test_incident_worker_rolls_back_update_when_persisting_existing_incident_fails() -> None:
+    clear_runtime_state()
+    store = FailOnUpdateIncidentStore()
+    event_manager = EventManager()
+    event_manager.clear_history()
+    worker = IncidentWorker(event_manager=event_manager, persistence_store=store)
+    worker.start()
+
+    event_manager.publish(
+        Event(
+            event_type=EventType.ALERT,
+            data={
+                "level": "error",
+                "message": "Checkout timeout in payment service",
+            },
+            source="test",
+        )
+    )
+    incident_id = worker.list_incidents()[0]["incidentId"]
+    store._fail_on_existing = True
+
+    event_manager.publish(
+        Event(
+            event_type=EventType.ALERT,
+            data={
+                "level": "error",
+                "message": "Checkout timeout in payment service",
+                "sourceSystem": "sentry",
+                "dedupKey": "sentry-event-rollback",
+            },
+            source="test",
+        )
+    )
+
+    updated = worker.get_incident(incident_id)
+    stored = store.get_incident(incident_id)
+
+    assert updated is not None
+    assert stored is not None
+    assert updated["occurrenceCount"] == 1
+    assert stored["occurrenceCount"] == 1
+    assert updated["sourceSystem"] is None
+    assert stored["sourceSystem"] is None
+    assert updated["dedupKey"] is None
+    assert stored["dedupKey"] is None
+    worker.stop()
+    clear_runtime_state()
