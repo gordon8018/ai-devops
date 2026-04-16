@@ -180,9 +180,13 @@ class WorkItemService:
             "work_item.status_changed",
             {
                 "workItemId": work_item.work_item_id,
-                "status": target_status.value,
+                "oldStatus": work_item.status.value,
+                "newStatus": target_status.value,
                 "qualityRunId": quality_run.quality_run_id if quality_run else None,
             },
+            source="kernel.work_items",
+            actor_id="system:kernel",
+            actor_type="system",
         )
         return transitioned
 

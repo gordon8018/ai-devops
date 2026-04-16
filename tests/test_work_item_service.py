@@ -172,6 +172,36 @@ def test_release_transition_accepts_passed_quality_run() -> None:
     assert transitioned.status is WorkItemStatus.CLOSED
 
 
+def test_transition_work_item_status_publishes_old_and_new_status() -> None:
+    bus = InMemoryEventBus()
+    service = WorkItemService(event_bus=bus, context_assembler=ContextPackAssembler())
+    session = service.create_legacy_session(
+        {
+            "repo": "acme/platform",
+            "title": "Promote to released",
+            "description": "Need structured status transition event",
+        }
+    )
+    quality_run = QualityRun(
+        quality_run_id="qr_001",
+        work_item_id=session.work_item.work_item_id,
+        gate_type="test",
+        status=QualityRunStatus.PASSED,
+    )
+
+    service.transition_work_item_status(
+        session.work_item,
+        target_status=WorkItemStatus.RELEASED,
+        quality_run=quality_run,
+    )
+
+    last_event = bus.history()[-1]
+    assert last_event.event_type == "work_item.status_changed"
+    assert last_event.payload["workItemId"] == session.work_item.work_item_id
+    assert last_event.payload["oldStatus"] == session.work_item.status.value
+    assert last_event.payload["newStatus"] == "released"
+
+
 def test_work_item_from_legacy_task_input_preserves_dedup_key() -> None:
     from packages.shared.domain.models import WorkItem
 
