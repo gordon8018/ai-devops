@@ -91,3 +91,73 @@ def test_incident_worker_reads_incidents_from_persistent_store_across_instances(
 
     assert restored is not None
     assert restored["message"] == "Checkout timeout in payment service"
+
+
+def test_incident_worker_promotes_source_system_and_dedup_key_to_top_level() -> None:
+    store = InMemoryIncidentStore()
+    event_manager = EventManager()
+    event_manager.clear_history()
+    worker = IncidentWorker(event_manager=event_manager, persistence_store=store)
+    worker.start()
+
+    payload = {
+        "level": "error",
+        "message": "Checkout timeout in payment service",
+        "details": {"service": "payments"},
+        "sourceSystem": "pagerduty",
+        "dedupKey": "pd-alert-42",
+    }
+    event_manager.publish(Event(event_type=EventType.ALERT, data=payload, source="test"))
+    incident = worker.list_incidents()[0]
+
+    assert incident["sourceSystem"] == "pagerduty"
+    assert incident["dedupKey"] == "pd-alert-42"
+    # Must be top-level, never inside details / payload.
+    assert "sourceSystem" not in incident.get("details", {})
+    assert "dedupKey" not in incident.get("details", {})
+
+    stored = store.incidents[incident["incidentId"]]
+    assert stored["sourceSystem"] == "pagerduty"
+    assert stored["dedupKey"] == "pd-alert-42"
+
+    worker.stop()
+
+
+def test_incident_worker_accepts_snake_case_source_system_and_dedup_key_aliases() -> None:
+    store = InMemoryIncidentStore()
+    event_manager = EventManager()
+    event_manager.clear_history()
+    worker = IncidentWorker(event_manager=event_manager, persistence_store=store)
+    worker.start()
+
+    payload = {
+        "level": "error",
+        "message": "Checkout timeout in payment service",
+        "source_system": "datadog",
+        "dedup_key": "dd-alert-77",
+    }
+    event_manager.publish(Event(event_type=EventType.ALERT, data=payload, source="test"))
+    incident = worker.list_incidents()[0]
+
+    assert incident["sourceSystem"] == "datadog"
+    assert incident["dedupKey"] == "dd-alert-77"
+    worker.stop()
+
+
+def test_incident_worker_sets_source_system_and_dedup_key_to_none_when_absent() -> None:
+    store = InMemoryIncidentStore()
+    event_manager = EventManager()
+    event_manager.clear_history()
+    worker = IncidentWorker(event_manager=event_manager, persistence_store=store)
+    worker.start()
+
+    payload = {
+        "level": "error",
+        "message": "Checkout timeout in payment service",
+    }
+    event_manager.publish(Event(event_type=EventType.ALERT, data=payload, source="test"))
+    incident = worker.list_incidents()[0]
+
+    assert incident["sourceSystem"] is None
+    assert incident["dedupKey"] is None
+    worker.stop()

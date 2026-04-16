@@ -80,6 +80,14 @@ class IncidentWorker:
             return
         incident_id = self._triage_engine.fingerprint(message)
         incident = self._incidents.get(incident_id)
+        source_system = (
+            str(payload.get("sourceSystem") or payload.get("source_system") or "").strip()
+            or None
+        )
+        dedup_key = (
+            str(payload.get("dedupKey") or payload.get("dedup_key") or "").strip()
+            or None
+        )
         if incident is None:
             incident = {
                 "incidentId": incident_id,
@@ -91,6 +99,8 @@ class IncidentWorker:
                 "status": "open",
                 "occurrenceCount": 0,
                 "details": payload.get("details") or {},
+                "sourceSystem": source_system,
+                "dedupKey": dedup_key,
             }
             self._incidents[incident_id] = incident
             store = self._store()
