@@ -114,6 +114,9 @@ class ReleaseWorker:
         work_item_id = str(payload.get("details", {}).get("work_item_id") or payload.get("task_id") or "").strip()
         if not work_item_id:
             return
+        existing = self.get_release(work_item_id)
+        if existing is not None:
+            return
 
         release_id = f"rel_{work_item_id}"
         stage = self._rollout_controller.next_stage("unknown")
@@ -142,7 +145,7 @@ class ReleaseWorker:
         if payload.get("type") != "guardrail_breach":
             return
         work_item_id = str(payload.get("work_item_id") or "").strip()
-        release = self._releases.get(work_item_id)
+        release = self.get_release(work_item_id)
         if release is None:
             return
 
@@ -155,6 +158,7 @@ class ReleaseWorker:
 
         release["status"] = "rolled_back"
         release["rollbackReason"] = decision.reason
+        self._releases[work_item_id] = release
         store = self._store()
         if store is not None and hasattr(store, "save_release"):
             store.save_release(release)

@@ -245,6 +245,41 @@ def test_release_worker_persists_intermediate_stages_to_store() -> None:
     worker.stop()
 
 
+def test_release_worker_does_not_reset_existing_release_on_duplicate_ready_event() -> None:
+    event_manager = EventManager()
+    event_manager.clear_history()
+    flag_adapter = RecordingFlagAdapter()
+    worker = ReleaseWorker(event_manager=event_manager, flag_adapter=flag_adapter)
+    worker.start()
+
+    ready_event = Event(
+        event_type=EventType.TASK_STATUS,
+        data={
+            "task_id": "wi_dup_ready",
+            "status": "ready",
+            "details": {"work_item_id": "wi_dup_ready"},
+        },
+        source="test",
+    )
+    event_manager.publish(ready_event)
+    worker.advance("wi_dup_ready")
+    worker.advance("wi_dup_ready")
+
+    event_manager.publish(ready_event)
+
+    release = worker.get_release("wi_dup_ready")
+
+    assert release is not None
+    assert release["stage"] == "1%"
+    assert release["status"] == "rolling_out"
+    assert flag_adapter.applied == [
+        ("rel_wi_dup_ready", "team-only"),
+        ("rel_wi_dup_ready", "beta"),
+        ("rel_wi_dup_ready", "1%"),
+    ]
+    worker.stop()
+
+
 def test_release_worker_reads_releases_from_persistent_store_across_instances() -> None:
     store = InMemoryReleaseStore()
     event_manager = EventManager()
@@ -275,3 +310,54 @@ def test_release_worker_reads_releases_from_persistent_store_across_instances() 
 
     assert release is not None
     assert release["releaseId"] == "rel_wi_003"
+
+
+def test_release_worker_rolls_back_persisted_release_after_restart() -> None:
+    store = InMemoryReleaseStore()
+    event_manager = EventManager()
+    event_manager.clear_history()
+    first_worker = ReleaseWorker(
+        event_manager=event_manager,
+        flag_adapter=RecordingFlagAdapter(),
+        persistence_store=store,
+    )
+    first_worker.start()
+
+    event_manager.publish(
+        Event(
+            event_type=EventType.TASK_STATUS,
+            data={
+                "task_id": "wi_persisted_rb",
+                "status": "ready",
+                "details": {"work_item_id": "wi_persisted_rb"},
+            },
+            source="test",
+        )
+    )
+    first_worker.stop()
+
+    restarted_worker = ReleaseWorker(
+        event_manager=event_manager,
+        flag_adapter=RecordingFlagAdapter(),
+        persistence_store=store,
+    )
+    restarted_worker.start()
+
+    event_manager.publish(
+        Event(
+            event_type=EventType.SYSTEM,
+            data={
+                "type": "guardrail_breach",
+                "work_item_id": "wi_persisted_rb",
+                "guardrails": {"error_rate": 0.07},
+                "thresholds": {"error_rate": 0.05},
+            },
+            source="test",
+        )
+    )
+
+    release = restarted_worker.get_release("wi_persisted_rb")
+
+    assert release is not None
+    assert release["status"] == "rolled_back"
+    restarted_worker.stop()
