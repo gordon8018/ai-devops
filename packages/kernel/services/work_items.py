@@ -43,9 +43,7 @@ class WorkItemService:
     ) -> None:
         self._event_bus = event_bus or InMemoryEventBus()
         if context_assembler is None:
-            from packages.context.packer.service import ContextPackAssembler
-
-            context_assembler = ContextPackAssembler()
+            raise ValueError("WorkItemService requires an explicit ContextPackProvider")
         self._context_assembler = context_assembler
 
     @property

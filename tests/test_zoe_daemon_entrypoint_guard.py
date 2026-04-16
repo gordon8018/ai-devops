@@ -203,3 +203,81 @@ def test_spawn_agent_prepares_agent_run_before_launch() -> None:
 
     assert prepared_runs, "spawn_agent must call prepare_agent_run before launch"
     assert result["metadata"]["agentRun"]["contextPackId"] == session.context_pack.pack_id
+
+
+def test_spawn_agent_reuses_existing_execution_session_metadata() -> None:
+    zoe_daemon = load_zoe_daemon_module()
+    task = {
+        "id": "task-existing-001",
+        "repo": "acme/platform",
+        "title": "Existing session",
+        "description": "Should not rebuild execution session metadata",
+        "prompt": "fix it",
+        "metadata": {
+            "workItem": {"workItemId": "wi_existing_001"},
+            "contextPack": {"packId": "ctx_existing_001"},
+            "planRequest": {"planId": "plan_existing_001"},
+            "agentRun": {
+                "runId": "run_existing_001",
+                "workItemId": "wi_existing_001",
+                "contextPackId": "ctx_existing_001",
+                "agent": "codex",
+                "model": "gpt-5.3-codex",
+                "status": "pending",
+            },
+        },
+    }
+
+    class StubWorkItemService:
+        def create_legacy_session(self, task_input, *, base_dir=None):
+            raise AssertionError("existing execution metadata should not rebuild a legacy session")
+
+        def prepare_agent_run(self, **kwargs):
+            raise AssertionError("existing execution metadata should not rebuild an agent run")
+
+    with (
+        tempfile.TemporaryDirectory() as repo_dir,
+        tempfile.TemporaryDirectory() as wt_dir,
+    ):
+        repo_root = Path(repo_dir)
+        worktree = Path(wt_dir)
+        prepared = PreparedWorkspace(
+            repo_root=repo_root,
+            worktree=worktree,
+            prompt_file=worktree / "prompt.txt",
+            task_spec_file=None,
+            scope_manifest_file=None,
+            sparse_checkout_applied=False,
+        )
+
+        class StubWorkspaceManager:
+            def __init__(self, **kwargs):
+                pass
+
+            def prepare_workspace(self, task, *, branch):
+                prepared.prompt_file.write_text(task["prompt"], encoding="utf-8")
+                return prepared
+
+        class StubAgentLauncher:
+            def __init__(self, **kwargs):
+                pass
+
+            def launch(self, task, *, worktree, prompt_file, task_spec_file):
+                return LaunchResult("process", None, 4321)
+
+        class StubRunStateRecorder:
+            def build_running_task_record(self, **kwargs):
+                return {"metadata": kwargs["task"].get("metadata", {})}
+
+        zoe_daemon.WorkItemService = StubWorkItemService
+        zoe_daemon.WorkspaceManager = StubWorkspaceManager
+        zoe_daemon.AgentLauncher = StubAgentLauncher
+        zoe_daemon.RunStateRecorder = StubRunStateRecorder
+        zoe_daemon.ensure_repo = lambda repo: repo_root
+        zoe_daemon.create_worktree = lambda repo_root, branch: worktree
+
+        result = zoe_daemon.spawn_agent(task)
+
+    assert result["metadata"]["workItem"]["workItemId"] == "wi_existing_001"
+    assert result["metadata"]["contextPack"]["packId"] == "ctx_existing_001"
+    assert result["metadata"]["agentRun"]["runId"] == "run_existing_001"

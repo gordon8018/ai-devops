@@ -276,3 +276,37 @@ def test_shared_domain_exports_context_pack_provider_protocol() -> None:
     from packages.shared import domain as shared_domain
 
     assert hasattr(shared_domain, "ContextPackProvider")
+
+
+def test_work_item_service_uses_injected_context_provider() -> None:
+    from packages.shared.domain.models import ContextPack, RiskProfile
+
+    calls = []
+
+    class StubContextProvider:
+        def build(self, work_item, *, legacy_task_input=None):
+            calls.append((work_item, legacy_task_input))
+            return ContextPack(
+                pack_id="ctx_stub_001",
+                work_item_id=work_item.work_item_id,
+                repo_scope=("apps/kernel_worker/**",),
+                acceptance_criteria=("use injected provider",),
+                risk_profile=RiskProfile.MEDIUM,
+            )
+
+    service = WorkItemService(
+        event_bus=InMemoryEventBus(),
+        context_assembler=StubContextProvider(),
+    )
+
+    session = service.create_legacy_session(
+        {
+            "repo": "acme/platform",
+            "title": "Use injected provider",
+            "description": "Context should come from the stub provider",
+        }
+    )
+
+    assert len(calls) == 1
+    assert calls[0][0] == session.work_item
+    assert session.context_pack.pack_id == "ctx_stub_001"

@@ -6,6 +6,7 @@ Consumes tasks from queue/, creates worktrees, and spawns coding agents.
 """
 
 import fnmatch
+import hashlib
 import json
 import os
 import shlex
@@ -69,6 +70,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from apps.release_worker.service import ReleaseWorker
 from apps.incident_worker.service import IncidentWorker
+from packages.context.packer.service import ContextPackAssembler
 from packages.kernel.runtime.services import AgentLauncher, QueueConsumer, RunStateRecorder, WorkspaceManager
 from packages.kernel.services.work_items import MissingContextPackError, WorkItemService
 from packages.shared.domain.runtime_state import configure_runtime_persistence
@@ -155,6 +157,17 @@ def runner_for_agent(agent: str) -> Path:
     if agent == "claude":
         return _agent_runner_claude()
     raise RuntimeError(f"Unsupported agent: {agent}")
+
+
+class DeadLetterableTaskError(RuntimeError):
+    """Queue payload is permanently invalid and should be dead-lettered."""
+
+
+def _build_work_item_service():
+    try:
+        return WorkItemService(context_assembler=ContextPackAssembler())
+    except TypeError:
+        return WorkItemService()
 
 
 
@@ -340,15 +353,22 @@ def spawn_agent(task: dict) -> dict:
 
 
 def _enrich_task_with_execution_session(task: dict) -> dict:
-    service = WorkItemService()
-    session = service.create_legacy_session(task, base_dir=ai_devops_home())
+    metadata = dict(task.get("metadata") or {}) if isinstance(task.get("metadata"), dict) else {}
+    if _has_execution_session_metadata(metadata):
+        return {
+            **task,
+            "metadata": metadata,
+        }
+
+    seeded_task = _seed_task_with_stable_work_item_id(task)
+    service = _build_work_item_service()
+    session = service.create_legacy_session(seeded_task, base_dir=ai_devops_home())
     agent_run = service.prepare_agent_run(
         work_item=session.work_item,
         context_pack=session.context_pack,
-        agent=str(task.get("agent", "codex")),
-        model=str(task.get("model", "gpt-5.3-codex")),
+        agent=str(seeded_task.get("agent", "codex")),
+        model=str(seeded_task.get("model", "gpt-5.3-codex")),
     )
-    metadata = dict(task.get("metadata") or {}) if isinstance(task.get("metadata"), dict) else {}
     metadata.update(
         {
             "workItem": session.work_item.to_dict(),
@@ -358,9 +378,38 @@ def _enrich_task_with_execution_session(task: dict) -> dict:
         }
     )
     return {
-        **task,
+        **seeded_task,
         "metadata": metadata,
     }
+
+
+def _has_execution_session_metadata(metadata: dict) -> bool:
+    work_item = metadata.get("workItem")
+    context_pack = metadata.get("contextPack")
+    plan_request = metadata.get("planRequest")
+    agent_run = metadata.get("agentRun")
+    return (
+        isinstance(work_item, dict)
+        and bool(work_item.get("workItemId"))
+        and isinstance(context_pack, dict)
+        and bool(context_pack.get("packId"))
+        and isinstance(plan_request, dict)
+        and bool(plan_request.get("planId"))
+        and isinstance(agent_run, dict)
+        and bool(agent_run.get("runId"))
+        and bool(agent_run.get("contextPackId"))
+    )
+
+
+def _seed_task_with_stable_work_item_id(task: dict) -> dict:
+    if task.get("workItemId"):
+        return dict(task)
+    task_id = str(task.get("id") or "").strip()
+    if not task_id:
+        return dict(task)
+    seeded = dict(task)
+    seeded["workItemId"] = f"wi_{hashlib.sha1(task_id.encode('utf-8')).hexdigest()[:12]}"
+    return seeded
 
 
 def _dead_letter_task(queue_file: Path, exc: Exception) -> None:
@@ -373,12 +422,22 @@ def _dead_letter_task(queue_file: Path, exc: Exception) -> None:
 
 
 def _is_dead_letter_error(exc: Exception) -> bool:
-    if isinstance(exc, (json.JSONDecodeError, MissingContextPackError, ValueError)):
-        return True
-    if isinstance(exc, RuntimeError):
-        message = str(exc)
-        return message.startswith("Invalid task JSON") or message.startswith("Invalid queue payload")
-    return False
+    return isinstance(exc, (DeadLetterableTaskError, MissingContextPackError))
+
+
+def _load_queue_task(consumer: QueueConsumer, queue_file: Path) -> dict:
+    try:
+        task = consumer.load_task(queue_file)
+    except json.JSONDecodeError as exc:
+        raise DeadLetterableTaskError(f"Invalid queue payload: {queue_file}") from exc
+    except RuntimeError as exc:
+        if str(exc).startswith("Invalid queue payload"):
+            raise DeadLetterableTaskError(str(exc)) from exc
+        raise
+
+    if "id" not in task or "repo" not in task:
+        raise DeadLetterableTaskError(f"Invalid task JSON (missing id/repo): {queue_file}")
+    return task
 
 
 
@@ -544,9 +603,7 @@ def main() -> None:
         # 队列处理
         for p in consumer.list_queue_files():
             try:
-                task = consumer.load_task(p)
-                if "id" not in task or "repo" not in task:
-                    raise RuntimeError(f"Invalid task JSON (missing id/repo): {p}")
+                task = _load_queue_task(consumer, p)
 
                 if get_task(task["id"]) is not None:
                     # 已存在跟踪记录时，删除队列项避免重复循环

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from packages.context.packer.service import ContextPackAssembler
 from packages.shared.domain.models import AuditEvent
 from packages.shared.domain.runtime_state import record_audit_event
 
@@ -221,7 +222,7 @@ def build_work_item_session(
 ):
     from packages.kernel.services.work_items import WorkItemService
 
-    service = WorkItemService()
+    service = WorkItemService(context_assembler=ContextPackAssembler())
     session = service.create_legacy_session(task_input, base_dir=base_dir)
     record_audit_event(
         AuditEvent(

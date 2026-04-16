@@ -54,6 +54,7 @@ def _make_session(task: dict) -> SimpleNamespace:
 
 
 def check_queue_schema_unchanged() -> dict:
+    # D1: queue payloads remain unchanged; execution session metadata is added lazily at spawn time.
     plan = Plan.from_dict(
         {
             "planId": "plan-acceptance",
@@ -192,7 +193,11 @@ def check_dead_letter_behavior() -> dict:
              patch.object(zoe_daemon, "get_global_scheduler") as mock_get_scheduler, \
              patch.object(zoe_daemon, "get_running_tasks", return_value=[]), \
              patch.object(zoe_daemon, "get_task", return_value=None), \
-             patch.object(zoe_daemon, "spawn_agent", side_effect=ValueError("prepare failed")), \
+             patch.object(
+                 zoe_daemon,
+                 "spawn_agent",
+                 side_effect=zoe_daemon.MissingContextPackError("prepare failed"),
+             ), \
              patch.object(zoe_daemon, "time") as mock_time:
             mock_guardian_cls.return_value = MagicMock(check_all=MagicMock(return_value={}))
             mock_release_worker_cls.return_value = MagicMock()
