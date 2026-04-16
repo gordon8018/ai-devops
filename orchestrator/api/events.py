@@ -63,6 +63,30 @@ def _resolve_event_journal_path() -> Path:
     return base / ".clawdbot" / "event_history.jsonl"
 
 
+def bridge_kernel_event_bus(event_bus: Any, event_manager: Optional["EventManager"] = None) -> Callable[[], None]:
+    """Mirror kernel bus envelopes into the legacy EventManager.
+
+    The bridge lives at the API layer so kernel code stays unaware of
+    orchestrator.api internals.
+    """
+
+    manager = event_manager or get_event_manager()
+
+    def _on_envelope(envelope: Any) -> None:
+        manager.publish(
+            Event(
+                event_type=EventType.SYSTEM,
+                event_name=str(getattr(envelope, "event_type", "") or ""),
+                data=dict(getattr(envelope, "payload", {}) or {}),
+                source=getattr(envelope, "source", None),
+                actor_id=str(getattr(envelope, "actor_id", "system:legacy") or "system:legacy"),
+                actor_type=str(getattr(envelope, "actor_type", "system") or "system"),
+            )
+        )
+
+    return event_bus.subscribe(_on_envelope)
+
+
 class EventManager:
     """
     Central event management system with pub/sub pattern

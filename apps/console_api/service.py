@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 import time
 
-from orchestrator.api.events import EventManager, get_event_manager
+from orchestrator.api.events import EventManager, bridge_kernel_event_bus, get_event_manager
 
 from apps.incident_worker.service import get_global_incident_worker
 from apps.release_worker.service import get_global_release_worker
@@ -30,8 +30,10 @@ class WorkItemsApplicationService:
         audit_recorder: Callable[[AuditEvent], None] | None = None,
         persistence_store: Any | None = None,
     ) -> None:
+        event_bus = InMemoryEventBus()
+        bridge_kernel_event_bus(event_bus, get_event_manager())
         self._service = WorkItemService(
-            event_bus=InMemoryEventBus(event_manager=get_event_manager()),
+            event_bus=event_bus,
             context_assembler=ContextPackAssembler(),
         )
         self._records: dict[str, dict] = {}

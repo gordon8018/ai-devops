@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from orchestrator.api.events import EventManager
+from orchestrator.api.events import EventManager, bridge_kernel_event_bus
 from packages.kernel.events.bus import EventEnvelope, InMemoryEventBus
 
 
@@ -48,7 +48,8 @@ def test_in_memory_event_bus_keeps_actor_and_source_metadata() -> None:
 def test_kernel_bus_bridge_publishes_domain_events_to_event_manager() -> None:
     manager = EventManager()
     manager.clear_history()
-    bus = InMemoryEventBus(event_manager=manager)
+    bus = InMemoryEventBus()
+    bridge_kernel_event_bus(bus, manager)
 
     bus.publish(
         "work_item.created",

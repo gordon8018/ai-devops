@@ -19,10 +19,9 @@ class EventEnvelope:
 class InMemoryEventBus:
     """Small event bus for bootstrap migrations before Redis Streams."""
 
-    def __init__(self, *, max_history: int = 200, event_manager: Any | None = None) -> None:
+    def __init__(self, *, max_history: int = 200) -> None:
         self._subscribers: list[Callable[[EventEnvelope], None]] = []
         self._history: deque[EventEnvelope] = deque(maxlen=max_history)
-        self._event_manager = event_manager
 
     def subscribe(self, callback: Callable[[EventEnvelope], None]) -> Callable[[], None]:
         self._subscribers.append(callback)
@@ -50,19 +49,6 @@ class InMemoryEventBus:
             actor_type=actor_type,
         )
         self._history.append(envelope)
-        if self._event_manager is not None:
-            from orchestrator.api.events import Event, EventType
-
-            self._event_manager.publish(
-                Event(
-                    event_type=EventType.SYSTEM,
-                    event_name=event_type,
-                    data=dict(payload),
-                    source=source,
-                    actor_id=actor_id,
-                    actor_type=actor_type,
-                )
-            )
         for callback in list(self._subscribers):
             callback(envelope)
         return envelope

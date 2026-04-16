@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from orchestrator.api.events import EventManager
+from orchestrator.api.events import EventManager, bridge_kernel_event_bus
 from packages.context.packer.service import ContextPackAssembler
 from packages.kernel.events.bus import InMemoryEventBus
 from packages.kernel.services.work_items import MissingContextPackError, MissingQualityRunError, WorkItemService
@@ -80,7 +80,8 @@ def test_prepare_agent_run_requires_context_pack() -> None:
 def test_create_legacy_session_bridges_domain_events_to_event_manager() -> None:
     manager = EventManager()
     manager.clear_history()
-    bus = InMemoryEventBus(event_manager=manager)
+    bus = InMemoryEventBus()
+    bridge_kernel_event_bus(bus, manager)
     service = WorkItemService(event_bus=bus, context_assembler=ContextPackAssembler())
 
     service.create_legacy_session(

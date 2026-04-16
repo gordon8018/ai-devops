@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from orchestrator.api.events import EventManager
+from orchestrator.api.events import EventManager, bridge_kernel_event_bus
 from packages.context.packer.service import ContextPackAssembler
 from packages.kernel.events.bus import InMemoryEventBus
 from packages.kernel.services.work_items import WorkItemService
@@ -17,7 +17,8 @@ from packages.shared.domain.models import QualityRun, QualityRunStatus, WorkItem
 def main() -> int:
     manager = EventManager()
     manager.clear_history()
-    bus = InMemoryEventBus(event_manager=manager)
+    bus = InMemoryEventBus()
+    bridge_kernel_event_bus(bus, manager)
     service = WorkItemService(event_bus=bus, context_assembler=ContextPackAssembler())
 
     session = service.create_legacy_session(
