@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 import time
 
-from orchestrator.api.events import EventManager, bridge_kernel_event_bus, get_event_manager
+from orchestrator.api.events import Event, EventManager, EventType, get_event_manager
 
 from apps.incident_worker.service import get_global_incident_worker
 from apps.release_worker.service import get_global_release_worker
@@ -13,6 +13,7 @@ from packages.kernel.services.work_items import WorkItemService
 from packages.quality.evals.service import EvalEngine
 from packages.shared.domain.control_plane import ensure_control_plane_store
 from packages.shared.domain.models import AuditEvent
+from packages.shared.mutation import MutationService
 from packages.shared.domain.runtime_state import (
     list_audit_events,
     list_eval_runs,
@@ -30,43 +31,82 @@ class WorkItemsApplicationService:
         audit_recorder: Callable[[AuditEvent], None] | None = None,
         persistence_store: Any | None = None,
     ) -> None:
-        event_bus = InMemoryEventBus()
-        bridge_kernel_event_bus(event_bus, get_event_manager())
+        self._event_bus = InMemoryEventBus()
+        self._event_manager = get_event_manager()
         self._service = WorkItemService(
-            event_bus=event_bus,
+            event_bus=self._event_bus,
             context_assembler=ContextPackAssembler(),
         )
         self._records: dict[str, dict] = {}
         self._audit_recorder = audit_recorder or record_audit_event
         self._persistence_store = persistence_store or ensure_control_plane_store()
+        self._mutations = MutationService()
 
     def _store(self) -> Any | None:
         return self._persistence_store or ensure_control_plane_store()
 
     def create_work_item(self, payload: dict) -> dict:
-        session = self._service.create_legacy_session(payload)
+        pending_events = []
+        unsubscribe = self._event_bus.subscribe(pending_events.append)
+        try:
+            session = self._service.create_legacy_session(payload)
+        finally:
+            unsubscribe()
         record = {
             "workItem": session.work_item.to_dict(),
             "contextPack": session.context_pack.to_dict(),
             "planRequest": session.plan_request,
         }
-        self._records[session.work_item.work_item_id] = record
         store = self._store()
-        if store is not None:
-            if hasattr(store, "save_work_item"):
-                store.save_work_item(session.work_item)
-            if hasattr(store, "save_context_pack"):
-                store.save_context_pack(session.context_pack)
-        self._audit_recorder(
-            AuditEvent(
-                audit_event_id=f"ae_{session.work_item.work_item_id}_created_{int(time.time() * 1000)}",
-                entity_type="work_item",
-                entity_id=session.work_item.work_item_id,
-                action="work_item_created",
-                payload={"repo": session.work_item.repo, "title": session.work_item.title},
-                actor_id="human:console",
-                actor_type="human",
+
+        def persist() -> None:
+            self._records[session.work_item.work_item_id] = record
+            if store is not None:
+                if hasattr(store, "save_work_item"):
+                    store.save_work_item(session.work_item)
+                if hasattr(store, "save_context_pack"):
+                    store.save_context_pack(session.context_pack)
+
+        def audit() -> None:
+            self._audit_recorder(
+                AuditEvent(
+                    audit_event_id=f"ae_{session.work_item.work_item_id}_created_{int(time.time() * 1000)}",
+                    entity_type="work_item",
+                    entity_id=session.work_item.work_item_id,
+                    action="work_item_created",
+                    payload={"repo": session.work_item.repo, "title": session.work_item.title},
+                    actor_id="human:console",
+                    actor_type="human",
+                )
             )
+
+        publish_events = [
+            lambda envelope=envelope: self._event_manager.publish(
+                Event(
+                    event_type=EventType.SYSTEM,
+                    event_name=envelope.event_type,
+                    data=dict(envelope.payload),
+                    source=envelope.source,
+                    actor_id=envelope.actor_id,
+                    actor_type=envelope.actor_type,
+                )
+            )
+            for envelope in pending_events
+        ]
+
+        def rollback() -> None:
+            self._records.pop(session.work_item.work_item_id, None)
+            if store is not None:
+                if hasattr(store, "delete_work_item"):
+                    store.delete_work_item(session.work_item.work_item_id)
+                if hasattr(store, "delete_context_pack"):
+                    store.delete_context_pack(session.work_item.work_item_id)
+
+        self._mutations.apply(
+            persist=persist,
+            audit=audit,
+            publish_events=publish_events,
+            rollback=rollback,
         )
         return record
 

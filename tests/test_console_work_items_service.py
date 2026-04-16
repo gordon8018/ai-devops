@@ -43,6 +43,12 @@ class InMemoryControlPlaneStore:
     def get_context_pack(self, work_item_id: str) -> dict | None:
         return self.context_packs.get(work_item_id)
 
+    def delete_work_item(self, work_item_id: str) -> None:
+        self.work_items.pop(work_item_id, None)
+
+    def delete_context_pack(self, work_item_id: str) -> None:
+        self.context_packs.pop(work_item_id, None)
+
     def list_work_items(self) -> list[dict]:
         return [self.get_work_item(work_item_id) for work_item_id in self.work_items]
 
@@ -65,6 +71,16 @@ class InMemoryControlPlaneStore:
 
     def list_incidents(self) -> list[dict]:
         return [dict(incident) for incident in self.incidents.values()]
+
+
+class FailOnSaveWorkItemStore(InMemoryControlPlaneStore):
+    def save_work_item(self, work_item) -> None:
+        raise RuntimeError("save work item failed")
+
+
+class FailOnSaveContextPackStore(InMemoryControlPlaneStore):
+    def save_context_pack(self, context_pack) -> None:
+        raise RuntimeError("save context pack failed")
 
 
 def test_console_application_service_creates_platform_native_payload() -> None:
@@ -113,6 +129,108 @@ def test_console_application_service_bridges_domain_events_to_event_manager() ->
         "context_pack.created",
         "plan.requested",
     ]
+
+
+def test_console_application_service_replays_all_domain_events_across_many_create_calls() -> None:
+    event_manager = EventManager()
+    event_manager.clear_history()
+    service = WorkItemsApplicationService()
+
+    for index in range(1, 71):
+        history_before = event_manager.get_history(limit=1000)
+        service.create_work_item(
+            {
+                "repo": "acme/platform",
+                "title": f"Bridge console events {index}",
+                "description": "Console path should publish bridged domain events",
+            }
+        )
+        history_after = event_manager.get_history(limit=1000)
+        emitted = history_after[len(history_before):]
+
+        assert [event["eventName"] for event in emitted] == [
+            "work_item.created",
+            "context_pack.created",
+            "plan.requested",
+        ]
+
+
+def test_console_application_service_does_not_audit_or_publish_events_when_work_item_persist_fails() -> None:
+    event_manager = EventManager()
+    event_manager.clear_history()
+    recorded_audits: list[dict] = []
+    service = WorkItemsApplicationService(
+        audit_recorder=lambda event: recorded_audits.append(event.to_dict()),
+        persistence_store=FailOnSaveWorkItemStore(),
+    )
+
+    try:
+        service.create_work_item(
+            {
+                "repo": "acme/platform",
+                "title": "Persist work item failure",
+                "description": "Abort mutation before audit or event publish",
+            }
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "save work item failed"
+    else:
+        raise AssertionError("expected save_work_item failure")
+
+    assert recorded_audits == []
+    assert event_manager.get_history(limit=10) == []
+
+
+def test_console_application_service_does_not_audit_or_publish_events_when_context_pack_persist_fails() -> None:
+    event_manager = EventManager()
+    event_manager.clear_history()
+    recorded_audits: list[dict] = []
+    service = WorkItemsApplicationService(
+        audit_recorder=lambda event: recorded_audits.append(event.to_dict()),
+        persistence_store=FailOnSaveContextPackStore(),
+    )
+
+    try:
+        service.create_work_item(
+            {
+                "repo": "acme/platform",
+                "title": "Persist context pack failure",
+                "description": "Abort mutation before audit or event publish",
+            }
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "save context pack failed"
+    else:
+        raise AssertionError("expected save_context_pack failure")
+
+    assert recorded_audits == []
+    assert event_manager.get_history(limit=10) == []
+
+
+def test_console_application_service_rolls_back_store_and_events_when_audit_fails() -> None:
+    event_manager = EventManager()
+    event_manager.clear_history()
+    store = InMemoryControlPlaneStore()
+    service = WorkItemsApplicationService(
+        audit_recorder=lambda _event: (_ for _ in ()).throw(RuntimeError("audit failed")),
+        persistence_store=store,
+    )
+
+    try:
+        service.create_work_item(
+            {
+                "repo": "acme/platform",
+                "title": "Audit failure rollback",
+                "description": "Store and event history should be restored",
+            }
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "audit failed"
+    else:
+        raise AssertionError("expected audit failure")
+
+    assert store.list_work_items() == []
+    assert event_manager.get_history(limit=10) == []
 
 
 def test_console_application_service_returns_context_pack_by_work_item_id() -> None:
