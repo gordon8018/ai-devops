@@ -152,3 +152,36 @@ def test_insert_task_mirrors_dedup_key_to_control_plane() -> None:
             }
         )
         assert store.work_items[-1]["dedupKey"] is None
+
+        # Case 5: top-level camelCase dedupKey (PR-0.4: legacy entrypoint compat)
+        db_mod.insert_task(
+            {
+                "id": "task-dedup-topcamel",
+                "repo": "acme/platform",
+                "title": "Top-level camelCase dedup",
+                "status": "queued",
+                "dedupKey": "incident-top-cc",
+            }
+        )
+        assert store.work_items[-1]["dedupKey"] == "incident-top-cc"
+
+
+def test_insert_task_prefers_snake_case_when_both_top_level_aliases_present() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_mod = _reload_db_module(tmpdir)
+        db_mod.init_db()
+        store = RecordingStore()
+        db_mod.enable_control_plane_dual_write(store)
+
+        # Both aliases present: snake_case wins (matches file convention)
+        db_mod.insert_task(
+            {
+                "id": "task-dedup-both",
+                "repo": "acme/platform",
+                "title": "Both aliases present",
+                "status": "queued",
+                "dedup_key": "snake-wins",
+                "dedupKey": "camel-loses",
+            }
+        )
+        assert store.work_items[-1]["dedupKey"] == "snake-wins"

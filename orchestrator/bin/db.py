@@ -171,11 +171,14 @@ def _build_work_item_from_task(task: dict[str, Any]) -> WorkItem:
         "ops": WorkItemType.OPS,
     }.get(explicit_type, WorkItemType.FEATURE)
 
-    # PR-0.2 Task 6: dedup_key is a first-class field on the WorkItem.
-    # Preference order: task["dedup_key"] -> metadata["dedupKey"] -> metadata["dedup_key"].
+    # PR-0.2 Task 6 + PR-0.4: dedup_key is a first-class field on the WorkItem.
+    # Preference order: task["dedup_key"] -> task["dedupKey"]
+    #                 -> metadata["dedupKey"] -> metadata["dedup_key"]
     raw_dedup = (
         task.get("dedup_key")
         if task.get("dedup_key") is not None
+        else task.get("dedupKey")
+        if task.get("dedupKey") is not None
         else metadata.get("dedupKey") or metadata.get("dedup_key")
     )
     dedup_key_value: str | None
@@ -402,13 +405,16 @@ def insert_task(task: dict) -> None:
 
     Note: cleaned_up is normally set via mark_cleaned_up() after worktree removal.
     """
-    # PR-0.2 Task 6: pull dedup_key from direct field or metadata (camelCase preferred).
+    # PR-0.2 Task 6 + PR-0.4: pull dedup_key from direct field, top-level camelCase
+    # alias, or metadata. Snake-case always wins when multiple sources are present.
     metadata_for_dedup = task.get("metadata") or {}
     if not isinstance(metadata_for_dedup, dict):
         metadata_for_dedup = {}
     raw_dedup_for_insert = (
         task.get("dedup_key")
         if task.get("dedup_key") is not None
+        else task.get("dedupKey")
+        if task.get("dedupKey") is not None
         else metadata_for_dedup.get("dedupKey") or metadata_for_dedup.get("dedup_key")
     )
     if raw_dedup_for_insert is None:
