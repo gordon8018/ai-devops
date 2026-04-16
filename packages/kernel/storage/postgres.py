@@ -22,7 +22,8 @@ def control_plane_schema_sql() -> str:
             requested_by TEXT NOT NULL,
             requested_at BIGINT NOT NULL,
             source TEXT NOT NULL,
-            metadata_json TEXT NOT NULL
+            metadata_json TEXT NOT NULL,
+            dedup_key TEXT
         );
         CREATE TABLE IF NOT EXISTS context_packs (
             pack_id TEXT PRIMARY KEY,
@@ -91,7 +92,9 @@ def control_plane_schema_sql() -> str:
             work_item_id TEXT,
             severity TEXT NOT NULL,
             status TEXT NOT NULL,
-            payload_json TEXT NOT NULL
+            payload_json TEXT NOT NULL,
+            source_system TEXT,
+            dedup_key TEXT
         );
         CREATE TABLE IF NOT EXISTS tickets (
             ticket_id TEXT PRIMARY KEY,
@@ -131,17 +134,28 @@ class ControlPlanePostgresStore:
                 sql = statement.strip()
                 if sql:
                     cursor.execute(sql)
+            # Idempotent column adds for existing DBs that predate these fields.
+            cursor.execute(
+                "ALTER TABLE work_items ADD COLUMN IF NOT EXISTS dedup_key TEXT"
+            )
+            cursor.execute(
+                "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS source_system TEXT"
+            )
+            cursor.execute(
+                "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS dedup_key TEXT"
+            )
             conn.commit()
 
     def save_work_item(self, work_item: WorkItem) -> None:
+        dedup_key = getattr(work_item, "dedup_key", None)
         with self._connection_factory() as conn:
             conn.cursor().execute(
                 """
                 INSERT INTO work_items (
                     work_item_id, type, title, goal, priority, status, repo,
                     constraints_json, acceptance_criteria_json, requested_by,
-                    requested_at, source, metadata_json
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    requested_at, source, metadata_json, dedup_key
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (work_item_id) DO UPDATE SET
                     type = EXCLUDED.type,
                     title = EXCLUDED.title,
@@ -154,7 +168,8 @@ class ControlPlanePostgresStore:
                     requested_by = EXCLUDED.requested_by,
                     requested_at = EXCLUDED.requested_at,
                     source = EXCLUDED.source,
-                    metadata_json = EXCLUDED.metadata_json
+                    metadata_json = EXCLUDED.metadata_json,
+                    dedup_key = EXCLUDED.dedup_key
                 """,
                 (
                     work_item.work_item_id,
@@ -170,6 +185,7 @@ class ControlPlanePostgresStore:
                     work_item.requested_at,
                     work_item.source,
                     json.dumps(work_item.metadata, ensure_ascii=False, sort_keys=True),
+                    dedup_key,
                 ),
             )
             conn.commit()
@@ -233,13 +249,16 @@ class ControlPlanePostgresStore:
             conn.cursor().execute(
                 """
                 INSERT INTO incidents (
-                    incident_id, work_item_id, severity, status, payload_json
-                ) VALUES (%s, %s, %s, %s, %s)
+                    incident_id, work_item_id, severity, status, payload_json,
+                    source_system, dedup_key
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (incident_id) DO UPDATE SET
                     work_item_id = EXCLUDED.work_item_id,
                     severity = EXCLUDED.severity,
                     status = EXCLUDED.status,
-                    payload_json = EXCLUDED.payload_json
+                    payload_json = EXCLUDED.payload_json,
+                    source_system = EXCLUDED.source_system,
+                    dedup_key = EXCLUDED.dedup_key
                 """,
                 (
                     incident["incidentId"],
@@ -247,6 +266,8 @@ class ControlPlanePostgresStore:
                     incident["severity"],
                     incident["status"],
                     json.dumps(incident, ensure_ascii=False, sort_keys=True),
+                    incident.get("sourceSystem"),
+                    incident.get("dedupKey"),
                 ),
             )
             conn.commit()
@@ -303,7 +324,7 @@ class ControlPlanePostgresStore:
                 SELECT
                     work_item_id, type, title, goal, priority, status, repo,
                     constraints_json, acceptance_criteria_json, requested_by,
-                    requested_at, source, metadata_json
+                    requested_at, source, metadata_json, dedup_key
                 FROM work_items
                 WHERE work_item_id = %s
                 """,
@@ -322,7 +343,7 @@ class ControlPlanePostgresStore:
                 SELECT
                     work_item_id, type, title, goal, priority, status, repo,
                     constraints_json, acceptance_criteria_json, requested_by,
-                    requested_at, source, metadata_json
+                    requested_at, source, metadata_json, dedup_key
                 FROM work_items
                 ORDER BY requested_at DESC, work_item_id DESC
                 """
@@ -367,26 +388,26 @@ class ControlPlanePostgresStore:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT payload_json
+                SELECT payload_json, source_system, dedup_key
                 FROM incidents
                 WHERE incident_id = %s
                 LIMIT 1
                 """,
                 (incident_id,),
             )
-            return self._decode_payload_row(cursor.fetchone())
+            return self._decode_incident_row(cursor.fetchone())
 
     def list_incidents(self) -> list[dict]:
         with self._connection_factory() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT payload_json
+                SELECT payload_json, source_system, dedup_key
                 FROM incidents
                 ORDER BY incident_id DESC
                 """
             )
-            return [payload for payload in (self._decode_payload_row(row) for row in cursor.fetchall()) if payload]
+            return [payload for payload in (self._decode_incident_row(row) for row in cursor.fetchall()) if payload]
 
     def list_audit_events(self) -> list[dict]:
         with self._connection_factory() as conn:
@@ -442,6 +463,32 @@ class ControlPlanePostgresStore:
         payload = row[0] if isinstance(row, (list, tuple)) else row
         return json.loads(payload or "{}")
 
+    @staticmethod
+    def _decode_incident_row(row) -> dict | None:
+        """Decode an incidents row into a dict, promoting source_system /
+        dedup_key columns onto the top level (preferring column values over
+        anything embedded in payload_json for defensive parity)."""
+        if row is None:
+            return None
+        if isinstance(row, (list, tuple)):
+            payload_raw = row[0]
+            source_system = row[1] if len(row) > 1 else None
+            dedup_key = row[2] if len(row) > 2 else None
+        else:
+            payload_raw = row
+            source_system = None
+            dedup_key = None
+        incident = json.loads(payload_raw or "{}")
+        if source_system is not None:
+            incident["sourceSystem"] = source_system
+        elif "sourceSystem" not in incident:
+            incident["sourceSystem"] = None
+        if dedup_key is not None:
+            incident["dedupKey"] = dedup_key
+        elif "dedupKey" not in incident:
+            incident["dedupKey"] = None
+        return incident
+
     def _fetch_context_pack(self, cursor, work_item_id: str) -> dict | None:
         cursor.execute(
             """
@@ -486,6 +533,7 @@ class ControlPlanePostgresStore:
             "requestedAt": row[10],
             "source": row[11],
             "metadata": json.loads(row[12] or "{}"),
+            "dedupKey": row[13] if len(row) > 13 else None,
         }
         context_pack = self._fetch_context_pack(context_cursor, work_item["workItemId"])
         return {
