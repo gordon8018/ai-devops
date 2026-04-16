@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from orchestrator.api.events import EventManager
 from packages.kernel.events.bus import EventEnvelope, InMemoryEventBus
 
 
@@ -42,3 +43,23 @@ def test_in_memory_event_bus_keeps_actor_and_source_metadata() -> None:
     assert envelope.source == "kernel"
     assert envelope.actor_id == "system:kernel"
     assert envelope.actor_type == "system"
+
+
+def test_kernel_bus_bridge_publishes_domain_events_to_event_manager() -> None:
+    manager = EventManager()
+    manager.clear_history()
+    bus = InMemoryEventBus(event_manager=manager)
+
+    bus.publish(
+        "work_item.created",
+        {"workItemId": "wi_001"},
+        source="kernel",
+        actor_id="system:kernel",
+        actor_type="system",
+    )
+
+    history = manager.get_history(limit=1)
+
+    assert history[0]["eventName"] == "work_item.created"
+    assert history[0]["data"]["workItemId"] == "wi_001"
+    assert history[0]["actorId"] == "system:kernel"
