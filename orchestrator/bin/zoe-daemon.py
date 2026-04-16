@@ -70,6 +70,7 @@ if str(ROOT_DIR) not in sys.path:
 from apps.release_worker.service import ReleaseWorker
 from apps.incident_worker.service import IncidentWorker
 from packages.kernel.runtime.services import AgentLauncher, QueueConsumer, RunStateRecorder, WorkspaceManager
+from packages.kernel.services.work_items import MissingContextPackError, WorkItemService
 from packages.shared.domain.runtime_state import configure_runtime_persistence
 
 
@@ -285,6 +286,7 @@ def launch_agent_process(
 
 
 def spawn_agent(task: dict) -> dict:
+    task = _enrich_task_with_execution_session(task)
     repo_name = task["repo"]
     agent = str(task.get("agent", "codex"))
 
@@ -335,6 +337,48 @@ def spawn_agent(task: dict) -> dict:
         model=model,
         effort=effort,
     )
+
+
+def _enrich_task_with_execution_session(task: dict) -> dict:
+    service = WorkItemService()
+    session = service.create_legacy_session(task, base_dir=ai_devops_home())
+    agent_run = service.prepare_agent_run(
+        work_item=session.work_item,
+        context_pack=session.context_pack,
+        agent=str(task.get("agent", "codex")),
+        model=str(task.get("model", "gpt-5.3-codex")),
+    )
+    metadata = dict(task.get("metadata") or {}) if isinstance(task.get("metadata"), dict) else {}
+    metadata.update(
+        {
+            "workItem": session.work_item.to_dict(),
+            "contextPack": session.context_pack.to_dict(),
+            "planRequest": session.plan_request,
+            "agentRun": agent_run.to_dict(),
+        }
+    )
+    return {
+        **task,
+        "metadata": metadata,
+    }
+
+
+def _dead_letter_task(queue_file: Path, exc: Exception) -> None:
+    dead_dir = queue_file.parent / "dead"
+    dead_dir.mkdir(parents=True, exist_ok=True)
+    dead_file = dead_dir / queue_file.name
+    err_file = dead_dir / f"{queue_file.stem}.err"
+    shutil.move(str(queue_file), str(dead_file))
+    err_file.write_text(f"{exc.__class__.__name__}: {exc}\n", encoding="utf-8")
+
+
+def _is_dead_letter_error(exc: Exception) -> bool:
+    if isinstance(exc, (json.JSONDecodeError, MissingContextPackError, ValueError)):
+        return True
+    if isinstance(exc, RuntimeError):
+        message = str(exc)
+        return message.startswith("Invalid task JSON") or message.startswith("Invalid queue payload")
+    return False
 
 
 
@@ -522,6 +566,10 @@ def main() -> None:
                 else:
                     print(f"Spawned task {item['id']} as background process {item['processId']}")
             except Exception as e:
+                if _is_dead_letter_error(e):
+                    _dead_letter_task(p, e)
+                    print(f"[DEAD-LETTER] Moved invalid task {p} to dead-letter: {e}")
+                    continue
                 # 不删除任务文件，保留用于排查与重试
                 print(f"[ERROR] Failed processing {p}: {e}")
 

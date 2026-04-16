@@ -201,6 +201,52 @@ class TestMainBootstrap(unittest.TestCase):
         release_worker.start.assert_called_once_with()
         incident_worker.start.assert_called_once_with()
 
+    def test_main_moves_invalid_prepare_failures_to_dead_letter(self):
+        consumer = MagicMock()
+        control_plane_store = MagicMock()
+        queue_root = Path(tempfile.mkdtemp())
+        queue_file = queue_root / "task-bad.json"
+        queue_file.write_text("{}", encoding="utf-8")
+        consumer.list_queue_files.return_value = [queue_file]
+        consumer.load_task.return_value = {
+            "id": "task-bad",
+            "repo": "acme/platform",
+            "title": "Bad task",
+            "description": "Will fail during prepare",
+        }
+
+        with patch.object(self.zoe_daemon, "init_db"), \
+             patch.object(self.zoe_daemon, "configure_control_plane_dual_write", return_value=control_plane_store), \
+             patch.object(self.zoe_daemon, "configure_runtime_persistence"), \
+             patch.object(self.zoe_daemon, "start_api_server"), \
+             patch.object(self.zoe_daemon, "ProcessGuardian") as mock_guardian_cls, \
+             patch.object(self.zoe_daemon, "ReleaseWorker") as mock_release_worker_cls, \
+             patch.object(self.zoe_daemon, "IncidentWorker") as mock_incident_worker_cls, \
+             patch.object(self.zoe_daemon, "get_event_manager") as mock_get_event_manager, \
+             patch.object(self.zoe_daemon, "QueueConsumer", return_value=consumer), \
+             patch.object(self.zoe_daemon, "queue_dir", return_value=queue_root), \
+             patch.object(self.zoe_daemon, "get_global_scheduler") as mock_get_scheduler, \
+             patch.object(self.zoe_daemon, "get_running_tasks", return_value=[]), \
+             patch.object(self.zoe_daemon, "get_task", return_value=None), \
+             patch.object(self.zoe_daemon, "spawn_agent", side_effect=ValueError("prepare failed")), \
+             patch.object(self.zoe_daemon, "time") as mock_time:
+            mock_guardian_cls.return_value = MagicMock(check_all=MagicMock(return_value={}))
+            mock_release_worker_cls.return_value = MagicMock()
+            mock_incident_worker_cls.return_value = MagicMock()
+            mock_get_event_manager.return_value = MagicMock()
+            mock_get_scheduler.return_value = MagicMock(schedule=MagicMock(return_value=[]))
+            mock_time.time.return_value = 999999999
+            mock_time.sleep.side_effect = KeyboardInterrupt()
+
+            with self.assertRaises(KeyboardInterrupt):
+                self.zoe_daemon.main()
+
+        dead_file = queue_root / "dead" / "task-bad.json"
+        err_file = queue_root / "dead" / "task-bad.err"
+        self.assertTrue(dead_file.exists(), "invalid queue task should be moved to dead-letter")
+        self.assertTrue(err_file.exists(), "dead-letter must include an .err sidecar")
+        self.assertFalse(queue_file.exists(), "original queue file should be removed after dead-lettering")
+
 
 if __name__ == "__main__":
     unittest.main()
