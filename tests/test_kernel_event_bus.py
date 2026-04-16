@@ -26,3 +26,19 @@ def test_in_memory_event_bus_publishes_to_subscribers_and_keeps_history() -> Non
         "work_item.created",
         "context_pack.created",
     ]
+
+
+def test_in_memory_event_bus_keeps_actor_and_source_metadata() -> None:
+    bus = InMemoryEventBus()
+
+    envelope = bus.publish(
+        "work_item.created",
+        {"workItemId": "wi_001"},
+        source="kernel",
+        actor_id="system:kernel",
+        actor_type="system",
+    )
+
+    assert envelope.source == "kernel"
+    assert envelope.actor_id == "system:kernel"
+    assert envelope.actor_type == "system"

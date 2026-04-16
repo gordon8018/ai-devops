@@ -11,6 +11,9 @@ class EventEnvelope:
     event_type: str
     payload: dict[str, Any]
     created_at: int = field(default_factory=lambda: int(time.time() * 1000))
+    source: str | None = None
+    actor_id: str = "system:legacy"
+    actor_type: str = "system"
 
 
 class InMemoryEventBus:
@@ -29,8 +32,22 @@ class InMemoryEventBus:
 
         return _unsubscribe
 
-    def publish(self, event_type: str, payload: dict[str, Any]) -> EventEnvelope:
-        envelope = EventEnvelope(event_type=event_type, payload=dict(payload))
+    def publish(
+        self,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        source: str | None = None,
+        actor_id: str = "system:legacy",
+        actor_type: str = "system",
+    ) -> EventEnvelope:
+        envelope = EventEnvelope(
+            event_type=event_type,
+            payload=dict(payload),
+            source=source,
+            actor_id=actor_id,
+            actor_type=actor_type,
+        )
         self._history.append(envelope)
         for callback in list(self._subscribers):
             callback(envelope)
