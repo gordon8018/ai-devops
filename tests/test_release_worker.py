@@ -181,6 +181,70 @@ def test_release_worker_advance_returns_none_for_unknown_work_item() -> None:
     worker.stop()
 
 
+def test_release_worker_persists_succeeded_state_to_store() -> None:
+    store = InMemoryReleaseStore()
+    event_manager = EventManager()
+    event_manager.clear_history()
+    worker = ReleaseWorker(
+        event_manager=event_manager,
+        flag_adapter=RecordingFlagAdapter(),
+        persistence_store=store,
+    )
+    worker.start()
+
+    event_manager.publish(
+        Event(
+            event_type=EventType.TASK_STATUS,
+            data={
+                "task_id": "wi_succ",
+                "status": "ready",
+                "details": {"work_item_id": "wi_succ"},
+            },
+            source="test",
+        )
+    )
+    for _ in range(5):
+        worker.advance("wi_succ")
+
+    stored = store.get_release("wi_succ")
+    assert stored is not None
+    assert stored["stage"] == "full"
+    assert stored["status"] == "succeeded"
+    worker.stop()
+
+
+def test_release_worker_persists_intermediate_stages_to_store() -> None:
+    store = InMemoryReleaseStore()
+    event_manager = EventManager()
+    event_manager.clear_history()
+    worker = ReleaseWorker(
+        event_manager=event_manager,
+        flag_adapter=RecordingFlagAdapter(),
+        persistence_store=store,
+    )
+    worker.start()
+
+    event_manager.publish(
+        Event(
+            event_type=EventType.TASK_STATUS,
+            data={
+                "task_id": "wi_mid",
+                "status": "ready",
+                "details": {"work_item_id": "wi_mid"},
+            },
+            source="test",
+        )
+    )
+    worker.advance("wi_mid")
+    worker.advance("wi_mid")
+
+    stored = store.get_release("wi_mid")
+    assert stored is not None
+    assert stored["stage"] == "1%"
+    assert stored["status"] == "rolling_out"
+    worker.stop()
+
+
 def test_release_worker_reads_releases_from_persistent_store_across_instances() -> None:
     store = InMemoryReleaseStore()
     event_manager = EventManager()
