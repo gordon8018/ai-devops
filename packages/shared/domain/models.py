@@ -222,6 +222,8 @@ class AuditEvent:
     action: str
     payload: dict[str, Any] = field(default_factory=dict)
     created_at: int = field(default_factory=lambda: int(time.time() * 1000))
+    actor_id: str = "system:legacy"
+    actor_type: str = "system"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -231,6 +233,8 @@ class AuditEvent:
             "action": self.action,
             "payload": self.payload,
             "createdAt": self.created_at,
+            "actorId": self.actor_id,
+            "actorType": self.actor_type,
         }
 
     def payload_json(self) -> str:

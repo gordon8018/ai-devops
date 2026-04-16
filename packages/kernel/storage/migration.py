@@ -64,6 +64,8 @@ class SQLiteToPostgresMigrator:
                         "note": row["note"] or "",
                     },
                     created_at=int(row["created_at"] or 0),
+                    actor_id="system:sqlite_migration",
+                    actor_type="system",
                 )
             )
             migrated += 1

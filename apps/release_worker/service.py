@@ -97,6 +97,8 @@ class ReleaseWorker:
                 entity_id=release["releaseId"],
                 action=action,
                 payload={"workItemId": work_item_id, "stage": next_stage},
+                actor_id="system:release_worker",
+                actor_type="system",
             )
         )
         return release
@@ -138,6 +140,8 @@ class ReleaseWorker:
                 entity_id=release_id,
                 action="release_started",
                 payload={"workItemId": work_item_id, "stage": stage},
+                actor_id="system:release_worker",
+                actor_type="system",
             )
         )
 
@@ -169,6 +173,8 @@ class ReleaseWorker:
                 entity_id=release["releaseId"],
                 action="release_rolled_back",
                 payload={"workItemId": work_item_id, "reason": decision.reason},
+                actor_id="system:release_worker",
+                actor_type="system",
             )
         )
         self._event_manager.publish_alert(

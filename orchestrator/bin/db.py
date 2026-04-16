@@ -235,6 +235,8 @@ def _mirror_task_to_control_plane(task: dict[str, Any], *, action: str) -> None:
                 "status": task.get("status"),
                 "repo": task.get("repo"),
             },
+            actor_id="system:sqlite_dual_write",
+            actor_type="system",
         )
     )
 

@@ -29,6 +29,23 @@ class RecordingStore:
         return list(self.eval_runs)
 
 
+def test_audit_event_to_dict_includes_actor_fields() -> None:
+    event = AuditEvent(
+        audit_event_id="ae_actor_001",
+        entity_type="work_item",
+        entity_id="wi_001",
+        action="work_item_created",
+        actor_id="human:alice",
+        actor_type="human",
+        payload={"repo": "acme/platform"},
+    )
+
+    payload = event.to_dict()
+
+    assert payload["actorId"] == "human:alice"
+    assert payload["actorType"] == "human"
+
+
 def test_runtime_state_mirrors_audit_events_and_eval_runs_to_persistent_store() -> None:
     clear_runtime_state()
     store = RecordingStore()

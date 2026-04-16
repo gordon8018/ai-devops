@@ -115,6 +115,8 @@ class IncidentWorker:
                     entity_id=incident_id,
                     action="incident_opened",
                     payload={"severity": incident["severity"], "message": message},
+                    actor_id="system:incident_worker",
+                    actor_type="system",
                 )
             )
         else:
@@ -156,6 +158,8 @@ class IncidentWorker:
                     entity_id=incident_id,
                     action="incident_closed",
                     payload={"resolved": True},
+                    actor_id="system:incident_worker",
+                    actor_type="system",
                 )
             )
 

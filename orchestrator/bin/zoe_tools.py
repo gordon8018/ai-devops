@@ -234,6 +234,8 @@ def build_work_item_session(
                 "repo": session.work_item.repo,
                 "title": session.work_item.title,
             },
+            actor_id="system:zoe_tools",
+            actor_type="system",
         )
     )
     return session

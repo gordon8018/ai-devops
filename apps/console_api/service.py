@@ -62,6 +62,8 @@ class WorkItemsApplicationService:
                 entity_id=session.work_item.work_item_id,
                 action="work_item_created",
                 payload={"repo": session.work_item.repo, "title": session.work_item.title},
+                actor_id="human:console",
+                actor_type="human",
             )
         )
         return record
