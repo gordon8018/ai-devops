@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from orchestrator.api.events import Event, EventManager, EventType
 from apps.release_worker.service import ReleaseWorker
+from packages.shared.domain.runtime_state import clear_runtime_state, list_audit_events
 
 
 class InMemoryReleaseStore:
@@ -28,6 +29,7 @@ class RecordingFlagAdapter:
 
 
 def test_release_worker_starts_rollout_on_ready_event() -> None:
+    clear_runtime_state()
     event_manager = EventManager()
     event_manager.clear_history()
     flag_adapter = RecordingFlagAdapter()
@@ -51,7 +53,10 @@ def test_release_worker_starts_rollout_on_ready_event() -> None:
     assert release is not None
     assert release["stage"] == "team-only"
     assert flag_adapter.applied == [("rel_wi_001", "team-only")]
+    assert list_audit_events()[-1]["actorId"] == "system:release_worker"
+    assert list_audit_events()[-1]["actorType"] == "system"
     worker.stop()
+    clear_runtime_state()
 
 
 def test_release_worker_rolls_back_on_guardrail_breach() -> None:

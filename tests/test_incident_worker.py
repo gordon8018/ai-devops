@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from apps.incident_worker.service import IncidentWorker
 from orchestrator.api.events import Event, EventManager, EventType
+from packages.shared.domain.runtime_state import clear_runtime_state, list_audit_events
 
 
 class InMemoryIncidentStore:
@@ -20,6 +21,7 @@ class InMemoryIncidentStore:
 
 
 def test_incident_worker_clusters_duplicate_alerts_into_one_incident() -> None:
+    clear_runtime_state()
     event_manager = EventManager()
     event_manager.clear_history()
     worker = IncidentWorker(event_manager=event_manager)
@@ -37,7 +39,10 @@ def test_incident_worker_clusters_duplicate_alerts_into_one_incident() -> None:
 
     assert len(incidents) == 1
     assert incidents[0]["occurrenceCount"] == 2
+    assert list_audit_events()[0]["actorId"] == "system:incident_worker"
+    assert list_audit_events()[0]["actorType"] == "system"
     worker.stop()
+    clear_runtime_state()
 
 
 def test_incident_worker_closes_incident_after_verify_event() -> None:
