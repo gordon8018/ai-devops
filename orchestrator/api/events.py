@@ -207,12 +207,15 @@ class EventManager:
         """Helper to publish task status events"""
         event = Event(
             event_type=EventType.TASK_STATUS,
+            event_name="task.status_changed",
             data={
                 "task_id": task_id,
                 "status": status,
                 "details": details or {},
             },
             source=source,
+            actor_id="system:legacy",
+            actor_type="system",
         )
         self.publish(event)
     

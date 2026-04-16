@@ -38,6 +38,20 @@ def test_event_manager_get_history_supports_limit_slicing() -> None:
     assert history[0]["data"]["task_id"] == "task_002"
 
 
+def test_publish_task_status_sets_default_actor_and_legacy_event_name() -> None:
+    manager = EventManager()
+    manager.clear_history()
+
+    manager.publish_task_status("task_001", "ready", {"work_item_id": "wi_001"}, source="test")
+
+    history = manager.get_history(limit=1)
+
+    assert history[0]["type"] == "task_status"
+    assert history[0]["eventName"] == "task.status_changed"
+    assert history[0]["actorId"] == "system:legacy"
+    assert history[0]["actorType"] == "system"
+
+
 def test_event_manager_reads_shared_journal_when_in_memory_history_is_empty() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         original_home = os.environ.get("AI_DEVOPS_HOME")
