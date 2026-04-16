@@ -16,6 +16,57 @@ from apps.console_api.service import (
 from packages.shared.domain.models import EvalRun, EvalRunStatus
 
 
+class InMemoryControlPlaneStore:
+    def __init__(self) -> None:
+        self.work_items: dict[str, dict] = {}
+        self.context_packs: dict[str, dict] = {}
+        self.releases: dict[str, dict] = {}
+        self.incidents: dict[str, dict] = {}
+
+    def save_work_item(self, work_item) -> None:
+        self.work_items[work_item.work_item_id] = work_item.to_dict()
+
+    def save_context_pack(self, context_pack) -> None:
+        self.context_packs[context_pack.work_item_id] = context_pack.to_dict()
+
+    def get_work_item(self, work_item_id: str) -> dict | None:
+        work_item = self.work_items.get(work_item_id)
+        if work_item is None:
+            return None
+        context_pack = self.context_packs.get(work_item_id)
+        return {
+            "workItem": work_item,
+            "contextPack": context_pack,
+            "planRequest": {"context": {"contextPack": context_pack}},
+        }
+
+    def get_context_pack(self, work_item_id: str) -> dict | None:
+        return self.context_packs.get(work_item_id)
+
+    def list_work_items(self) -> list[dict]:
+        return [self.get_work_item(work_item_id) for work_item_id in self.work_items]
+
+    def save_release(self, release: dict) -> None:
+        self.releases[release["workItemId"]] = dict(release)
+
+    def get_release(self, work_item_id: str) -> dict | None:
+        release = self.releases.get(work_item_id)
+        return dict(release) if release is not None else None
+
+    def list_releases(self) -> list[dict]:
+        return [dict(release) for release in self.releases.values()]
+
+    def save_incident(self, incident: dict) -> None:
+        self.incidents[incident["incidentId"]] = dict(incident)
+
+    def get_incident(self, incident_id: str) -> dict | None:
+        incident = self.incidents.get(incident_id)
+        return dict(incident) if incident is not None else None
+
+    def list_incidents(self) -> list[dict]:
+        return [dict(incident) for incident in self.incidents.values()]
+
+
 def test_console_application_service_creates_platform_native_payload() -> None:
     recorded_audits: list[dict] = []
     service = WorkItemsApplicationService(audit_recorder=lambda event: recorded_audits.append(event.to_dict()))
@@ -56,6 +107,26 @@ def test_console_application_service_returns_context_pack_by_work_item_id() -> N
 
     assert context_pack is not None
     assert context_pack["packId"] == result["contextPack"]["packId"]
+
+
+def test_console_application_service_reads_work_items_from_persistent_store_across_service_instances() -> None:
+    store = InMemoryControlPlaneStore()
+    writer = WorkItemsApplicationService(persistence_store=store)
+    record = writer.create_work_item(
+        {
+            "repo": "acme/platform",
+            "title": "Persist work item endpoint",
+            "description": "Reload from control plane store",
+        }
+    )
+
+    reader = WorkItemsApplicationService(persistence_store=store)
+
+    restored = reader.get_work_item(record["workItem"]["workItemId"])
+
+    assert restored is not None
+    assert restored["workItem"]["title"] == "Persist work item endpoint"
+    assert restored["contextPack"]["workItemId"] == record["workItem"]["workItemId"]
 
 
 def test_console_application_service_builds_mission_control_summary() -> None:

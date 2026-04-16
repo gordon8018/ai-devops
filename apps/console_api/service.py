@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 import time
 
 from orchestrator.api.events import EventManager, get_event_manager
@@ -11,6 +11,7 @@ from packages.context.packer.service import ContextPackAssembler
 from packages.kernel.events.bus import InMemoryEventBus
 from packages.kernel.services.work_items import WorkItemService
 from packages.quality.evals.service import EvalEngine
+from packages.shared.domain.control_plane import ensure_control_plane_store
 from packages.shared.domain.models import AuditEvent
 from packages.shared.domain.runtime_state import (
     list_audit_events,
@@ -23,13 +24,22 @@ from packages.shared.domain.runtime_state import (
 class WorkItemsApplicationService:
     """Bootstrap BFF-facing service for platform-native work item creation."""
 
-    def __init__(self, *, audit_recorder: Callable[[AuditEvent], None] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        audit_recorder: Callable[[AuditEvent], None] | None = None,
+        persistence_store: Any | None = None,
+    ) -> None:
         self._service = WorkItemService(
             event_bus=InMemoryEventBus(),
             context_assembler=ContextPackAssembler(),
         )
         self._records: dict[str, dict] = {}
         self._audit_recorder = audit_recorder or record_audit_event
+        self._persistence_store = persistence_store or ensure_control_plane_store()
+
+    def _store(self) -> Any | None:
+        return self._persistence_store or ensure_control_plane_store()
 
     def create_work_item(self, payload: dict) -> dict:
         session = self._service.create_legacy_session(payload)
@@ -39,6 +49,12 @@ class WorkItemsApplicationService:
             "planRequest": session.plan_request,
         }
         self._records[session.work_item.work_item_id] = record
+        store = self._store()
+        if store is not None:
+            if hasattr(store, "save_work_item"):
+                store.save_work_item(session.work_item)
+            if hasattr(store, "save_context_pack"):
+                store.save_context_pack(session.context_pack)
         self._audit_recorder(
             AuditEvent(
                 audit_event_id=f"ae_{session.work_item.work_item_id}_created_{int(time.time() * 1000)}",
@@ -51,19 +67,41 @@ class WorkItemsApplicationService:
         return record
 
     def get_work_item(self, work_item_id: str) -> dict | None:
-        return self._records.get(work_item_id)
+        record = self._records.get(work_item_id)
+        if record is not None:
+            return record
+        store = self._store()
+        if store is not None and hasattr(store, "get_work_item"):
+            return store.get_work_item(work_item_id)
+        return None
 
     def get_context_pack(self, work_item_id: str) -> dict | None:
         record = self._records.get(work_item_id)
         if record is None:
+            store = self._store()
+            if store is not None and hasattr(store, "get_context_pack"):
+                return store.get_context_pack(work_item_id)
             return None
         return record.get("contextPack")
 
     def list_work_items(self) -> list[dict]:
-        return list(self._records.values())
+        store = self._store()
+        persisted = (
+            list(store.list_work_items())
+            if store is not None and hasattr(store, "list_work_items")
+            else []
+        )
+        merged = {record["workItem"]["workItemId"]: record for record in persisted}
+        merged.update({record["workItem"]["workItemId"]: record for record in self._records.values()})
+        return list(merged.values())
 
 
 def _default_release_reader() -> list[dict]:
+    store = ensure_control_plane_store()
+    if store is not None and hasattr(store, "list_releases"):
+        releases = list(store.list_releases())
+        if releases:
+            return releases
     worker = get_global_release_worker()
     if worker is None:
         return []
@@ -71,6 +109,11 @@ def _default_release_reader() -> list[dict]:
 
 
 def _default_incident_reader() -> list[dict]:
+    store = ensure_control_plane_store()
+    if store is not None and hasattr(store, "list_incidents"):
+        incidents = list(store.list_incidents())
+        if incidents:
+            return incidents
     worker = get_global_incident_worker()
     if worker is None:
         return []

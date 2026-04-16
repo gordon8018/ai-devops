@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from packages.kernel.storage.postgres import ControlPlanePostgresStore
+from packages.shared.domain.control_plane import clear_control_plane_store, get_control_plane_store, set_control_plane_store
 from packages.shared.domain.models import (
     AuditEvent,
     WorkItem,
@@ -69,19 +70,16 @@ class _DynamicDBPath(os.PathLike[str]):
 
 # Module-level alias for external code that reads DB_PATH directly (e.g. tests, scripts)
 DB_PATH = _DynamicDBPath()
-_CONTROL_PLANE_STORE: Any | None = None
 
 
 def enable_control_plane_dual_write(store: Any) -> None:
     """Enable mirrored writes into the control-plane store."""
-    global _CONTROL_PLANE_STORE
-    _CONTROL_PLANE_STORE = store
+    set_control_plane_store(store)
 
 
 def disable_control_plane_dual_write() -> None:
     """Disable mirrored writes into the control-plane store."""
-    global _CONTROL_PLANE_STORE
-    _CONTROL_PLANE_STORE = None
+    clear_control_plane_store()
 
 
 def _build_control_plane_store_from_dsn(dsn: str) -> Any:
@@ -202,12 +200,13 @@ def _build_work_item_from_task(task: dict[str, Any]) -> WorkItem:
 
 
 def _mirror_task_to_control_plane(task: dict[str, Any], *, action: str) -> None:
-    if _CONTROL_PLANE_STORE is None:
+    store = get_control_plane_store()
+    if store is None:
         return
 
     work_item = _build_work_item_from_task(task)
-    _CONTROL_PLANE_STORE.save_work_item(work_item)
-    _CONTROL_PLANE_STORE.save_audit_event(
+    store.save_work_item(work_item)
+    store.save_audit_event(
         AuditEvent(
             audit_event_id=f"ae_{task['id']}_{action}_{int(time.time() * 1000)}",
             entity_type="work_item",

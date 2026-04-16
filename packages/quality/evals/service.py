@@ -7,12 +7,23 @@ class EvalEngine:
     """Build structured eval runs from recent platform events."""
 
     def evaluate_work_item(self, *, work_item_id: str, events: list[dict]) -> EvalRun:
+        def _matches_work_item(event: dict) -> bool:
+            data = dict(event.get("data") or {})
+            details = dict(data.get("details") or {})
+            return any(
+                candidate == work_item_id
+                for candidate in (
+                    data.get("task_id"),
+                    data.get("work_item_id"),
+                    details.get("task_id"),
+                    details.get("work_item_id"),
+                )
+            )
+
         relevant = [
             event
             for event in events
-            if event.get("data", {}).get("task_id") == work_item_id
-            or event.get("data", {}).get("work_item_id") == work_item_id
-            or event.get("type") == "alert"
+            if _matches_work_item(event)
         ]
         task_statuses = [
             event.get("data", {}).get("status")

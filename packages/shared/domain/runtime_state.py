@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from packages.shared.domain.control_plane import ensure_control_plane_store
 from packages.shared.domain.models import AuditEvent, EvalRun
 
 _AUDIT_EVENTS: list[dict] = []
@@ -19,7 +20,14 @@ def record_audit_event(event: AuditEvent) -> None:
 
 
 def list_audit_events() -> list[dict]:
-    return list(_AUDIT_EVENTS)
+    store = _PERSISTENCE_STORE or ensure_control_plane_store()
+    persisted = list(store.list_audit_events()) if store is not None and hasattr(store, "list_audit_events") else []
+    merged = {
+        event.get("auditEventId"): event
+        for event in persisted + list(_AUDIT_EVENTS)
+        if event.get("auditEventId")
+    }
+    return list(merged.values())
 
 
 def record_eval_run(eval_run: EvalRun) -> None:
@@ -34,7 +42,14 @@ def record_eval_run(eval_run: EvalRun) -> None:
 
 
 def list_eval_runs() -> list[dict]:
-    return list(_EVAL_RUNS)
+    store = _PERSISTENCE_STORE or ensure_control_plane_store()
+    persisted = list(store.list_eval_runs()) if store is not None and hasattr(store, "list_eval_runs") else []
+    merged = {
+        event.get("evalRunId"): event
+        for event in persisted + list(_EVAL_RUNS)
+        if event.get("evalRunId")
+    }
+    return list(merged.values())
 
 
 def clear_runtime_state() -> None:

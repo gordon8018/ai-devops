@@ -6,6 +6,7 @@ import time
 from orchestrator.api.events import Event, EventManager, EventType
 from packages.incident.triage.service import TriageEngine
 from packages.incident.verify.service import VerifyEngine
+from packages.shared.domain.control_plane import ensure_control_plane_store
 from packages.shared.domain.models import AuditEvent
 from packages.shared.domain.runtime_state import record_audit_event
 
@@ -21,12 +22,17 @@ class IncidentWorker:
         event_manager: EventManager,
         triage_engine: TriageEngine | None = None,
         verify_engine: VerifyEngine | None = None,
+        persistence_store: Any | None = None,
     ) -> None:
         self._event_manager = event_manager
         self._triage_engine = triage_engine or TriageEngine()
         self._verify_engine = verify_engine or VerifyEngine()
+        self._persistence_store = persistence_store or ensure_control_plane_store()
         self._incidents: dict[str, dict[str, Any]] = {}
         self._unsubscribe: Callable[[], None] | None = None
+
+    def _store(self) -> Any | None:
+        return self._persistence_store or ensure_control_plane_store()
 
     def start(self) -> None:
         global _GLOBAL_INCIDENT_WORKER
@@ -46,9 +52,19 @@ class IncidentWorker:
                 _GLOBAL_INCIDENT_WORKER = None
 
     def list_incidents(self) -> list[dict[str, Any]]:
+        store = self._store()
+        if store is not None and hasattr(store, "list_incidents"):
+            incidents = list(store.list_incidents())
+            if incidents:
+                return incidents
         return list(self._incidents.values())
 
     def get_incident(self, incident_id: str) -> dict[str, Any] | None:
+        store = self._store()
+        if store is not None and hasattr(store, "get_incident"):
+            incident = store.get_incident(incident_id)
+            if incident is not None:
+                return incident
         return self._incidents.get(incident_id)
 
     def _handle_event(self, event: Event) -> None:
@@ -77,6 +93,9 @@ class IncidentWorker:
                 "details": payload.get("details") or {},
             }
             self._incidents[incident_id] = incident
+            store = self._store()
+            if store is not None and hasattr(store, "save_incident"):
+                store.save_incident(incident)
             record_audit_event(
                 AuditEvent(
                     audit_event_id=f"ae_{incident_id}_opened_{int(time.time() * 1000)}",
@@ -87,6 +106,9 @@ class IncidentWorker:
                 )
             )
         incident["occurrenceCount"] += 1
+        store = self._store()
+        if store is not None and hasattr(store, "save_incident"):
+            store.save_incident(incident)
 
     def _verify_incident(self, payload: dict[str, Any]) -> None:
         if payload.get("type") != "incident_verify":
@@ -97,6 +119,9 @@ class IncidentWorker:
             return
         if self._verify_engine.should_close(resolved=bool(payload.get("resolved"))):
             incident["status"] = "closed"
+            store = self._store()
+            if store is not None and hasattr(store, "save_incident"):
+                store.save_incident(incident)
             record_audit_event(
                 AuditEvent(
                     audit_event_id=f"ae_{incident_id}_closed_{int(time.time() * 1000)}",

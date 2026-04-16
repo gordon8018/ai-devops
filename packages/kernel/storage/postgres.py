@@ -142,6 +142,19 @@ class ControlPlanePostgresStore:
                     constraints_json, acceptance_criteria_json, requested_by,
                     requested_at, source, metadata_json
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (work_item_id) DO UPDATE SET
+                    type = EXCLUDED.type,
+                    title = EXCLUDED.title,
+                    goal = EXCLUDED.goal,
+                    priority = EXCLUDED.priority,
+                    status = EXCLUDED.status,
+                    repo = EXCLUDED.repo,
+                    constraints_json = EXCLUDED.constraints_json,
+                    acceptance_criteria_json = EXCLUDED.acceptance_criteria_json,
+                    requested_by = EXCLUDED.requested_by,
+                    requested_at = EXCLUDED.requested_at,
+                    source = EXCLUDED.source,
+                    metadata_json = EXCLUDED.metadata_json
                 """,
                 (
                     work_item.work_item_id,
@@ -170,6 +183,15 @@ class ControlPlanePostgresStore:
                     recent_changes_json, constraints_json, acceptance_criteria_json,
                     known_failures_json, risk_profile
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (pack_id) DO UPDATE SET
+                    work_item_id = EXCLUDED.work_item_id,
+                    repo_scope_json = EXCLUDED.repo_scope_json,
+                    docs_json = EXCLUDED.docs_json,
+                    recent_changes_json = EXCLUDED.recent_changes_json,
+                    constraints_json = EXCLUDED.constraints_json,
+                    acceptance_criteria_json = EXCLUDED.acceptance_criteria_json,
+                    known_failures_json = EXCLUDED.known_failures_json,
+                    risk_profile = EXCLUDED.risk_profile
                 """,
                 (
                     context_pack.pack_id,
@@ -181,6 +203,50 @@ class ControlPlanePostgresStore:
                     json.dumps(list(context_pack.acceptance_criteria), ensure_ascii=False),
                     json.dumps(list(context_pack.known_failures), ensure_ascii=False),
                     context_pack.risk_profile.value,
+                ),
+            )
+            conn.commit()
+
+    def save_release(self, release: dict) -> None:
+        with self._connection_factory() as conn:
+            conn.cursor().execute(
+                """
+                INSERT INTO releases (
+                    release_id, work_item_id, status, payload_json
+                ) VALUES (%s, %s, %s, %s)
+                ON CONFLICT (release_id) DO UPDATE SET
+                    work_item_id = EXCLUDED.work_item_id,
+                    status = EXCLUDED.status,
+                    payload_json = EXCLUDED.payload_json
+                """,
+                (
+                    release["releaseId"],
+                    release["workItemId"],
+                    release["status"],
+                    json.dumps(release, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+            conn.commit()
+
+    def save_incident(self, incident: dict) -> None:
+        with self._connection_factory() as conn:
+            conn.cursor().execute(
+                """
+                INSERT INTO incidents (
+                    incident_id, work_item_id, severity, status, payload_json
+                ) VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (incident_id) DO UPDATE SET
+                    work_item_id = EXCLUDED.work_item_id,
+                    severity = EXCLUDED.severity,
+                    status = EXCLUDED.status,
+                    payload_json = EXCLUDED.payload_json
+                """,
+                (
+                    incident["incidentId"],
+                    incident.get("workItemId"),
+                    incident["severity"],
+                    incident["status"],
+                    json.dumps(incident, ensure_ascii=False, sort_keys=True),
                 ),
             )
             conn.commit()
@@ -228,3 +294,205 @@ class ControlPlanePostgresStore:
                 ),
             )
             conn.commit()
+
+    def get_work_item(self, work_item_id: str) -> dict | None:
+        with self._connection_factory() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT
+                    work_item_id, type, title, goal, priority, status, repo,
+                    constraints_json, acceptance_criteria_json, requested_by,
+                    requested_at, source, metadata_json
+                FROM work_items
+                WHERE work_item_id = %s
+                """,
+                (work_item_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return self._compose_work_item_record(conn.cursor(), row)
+
+    def list_work_items(self) -> list[dict]:
+        with self._connection_factory() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT
+                    work_item_id, type, title, goal, priority, status, repo,
+                    constraints_json, acceptance_criteria_json, requested_by,
+                    requested_at, source, metadata_json
+                FROM work_items
+                ORDER BY requested_at DESC, work_item_id DESC
+                """
+            )
+            rows = cursor.fetchall()
+            context_cursor = conn.cursor()
+            return [self._compose_work_item_record(context_cursor, row) for row in rows]
+
+    def get_context_pack(self, work_item_id: str) -> dict | None:
+        with self._connection_factory() as conn:
+            return self._fetch_context_pack(conn.cursor(), work_item_id)
+
+    def get_release(self, work_item_id: str) -> dict | None:
+        with self._connection_factory() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT payload_json
+                FROM releases
+                WHERE work_item_id = %s
+                ORDER BY release_id DESC
+                LIMIT 1
+                """,
+                (work_item_id,),
+            )
+            return self._decode_payload_row(cursor.fetchone())
+
+    def list_releases(self) -> list[dict]:
+        with self._connection_factory() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT payload_json
+                FROM releases
+                ORDER BY release_id DESC
+                """
+            )
+            return [payload for payload in (self._decode_payload_row(row) for row in cursor.fetchall()) if payload]
+
+    def get_incident(self, incident_id: str) -> dict | None:
+        with self._connection_factory() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT payload_json
+                FROM incidents
+                WHERE incident_id = %s
+                LIMIT 1
+                """,
+                (incident_id,),
+            )
+            return self._decode_payload_row(cursor.fetchone())
+
+    def list_incidents(self) -> list[dict]:
+        with self._connection_factory() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT payload_json
+                FROM incidents
+                ORDER BY incident_id DESC
+                """
+            )
+            return [payload for payload in (self._decode_payload_row(row) for row in cursor.fetchall()) if payload]
+
+    def list_audit_events(self) -> list[dict]:
+        with self._connection_factory() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT audit_event_id, entity_type, entity_id, action, payload_json, created_at
+                FROM audit_events
+                ORDER BY created_at ASC, audit_event_id ASC
+                """
+            )
+            return [
+                {
+                    "auditEventId": row[0],
+                    "entityType": row[1],
+                    "entityId": row[2],
+                    "action": row[3],
+                    "payload": json.loads(row[4] or "{}"),
+                    "createdAt": row[5],
+                }
+                for row in cursor.fetchall()
+            ]
+
+    def list_eval_runs(self) -> list[dict]:
+        with self._connection_factory() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT eval_run_id, work_item_id, status, payload_json
+                FROM eval_runs
+                ORDER BY eval_run_id ASC
+                """
+            )
+            return [
+                {
+                    "evalRunId": row[0],
+                    "workItemId": row[1],
+                    "status": row[2],
+                    "summary": json.loads(row[3] or "{}").get("summary", ""),
+                    "payload": {
+                        key: value
+                        for key, value in json.loads(row[3] or "{}").items()
+                        if key != "summary"
+                    },
+                }
+                for row in cursor.fetchall()
+            ]
+
+    @staticmethod
+    def _decode_payload_row(row) -> dict | None:
+        if row is None:
+            return None
+        payload = row[0] if isinstance(row, (list, tuple)) else row
+        return json.loads(payload or "{}")
+
+    def _fetch_context_pack(self, cursor, work_item_id: str) -> dict | None:
+        cursor.execute(
+            """
+            SELECT
+                pack_id, work_item_id, repo_scope_json, docs_json,
+                recent_changes_json, constraints_json, acceptance_criteria_json,
+                known_failures_json, risk_profile
+            FROM context_packs
+            WHERE work_item_id = %s
+            ORDER BY pack_id DESC
+            LIMIT 1
+            """,
+            (work_item_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return {
+            "packId": row[0],
+            "workItemId": row[1],
+            "repoScope": json.loads(row[2] or "[]"),
+            "docs": json.loads(row[3] or "[]"),
+            "recentChanges": json.loads(row[4] or "[]"),
+            "constraints": json.loads(row[5] or "{}"),
+            "acceptanceCriteria": json.loads(row[6] or "[]"),
+            "knownFailures": json.loads(row[7] or "[]"),
+            "riskProfile": row[8],
+        }
+
+    def _compose_work_item_record(self, context_cursor, row) -> dict:
+        work_item = {
+            "workItemId": row[0],
+            "type": row[1],
+            "title": row[2],
+            "goal": row[3],
+            "priority": row[4],
+            "status": row[5],
+            "repo": row[6],
+            "constraints": json.loads(row[7] or "{}"),
+            "acceptanceCriteria": json.loads(row[8] or "[]"),
+            "requestedBy": row[9],
+            "requestedAt": row[10],
+            "source": row[11],
+            "metadata": json.loads(row[12] or "{}"),
+        }
+        context_pack = self._fetch_context_pack(context_cursor, work_item["workItemId"])
+        return {
+            "workItem": work_item,
+            "contextPack": context_pack,
+            "planRequest": {
+                "workItem": work_item,
+                "context": {"contextPack": context_pack},
+            },
+        }
