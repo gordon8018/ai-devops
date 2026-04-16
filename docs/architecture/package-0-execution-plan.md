@@ -739,9 +739,53 @@ git commit -m "chore: complete package 0 acceptance"
 
 ---
 
-Plan complete and saved to `docs/architecture/package-0-execution-plan.md`. Two execution options:
+## 完工记录
 
-1. Subagent-Driven (recommended) - I dispatch a fresh subagent per task, review between tasks, fast iteration
-2. Inline Execution - Execute tasks in this session using executing-plans, batch execution with checkpoints
+- **Checkpoint tag:** `package-0`（annotated，指向落盘完工的 commit）
+- **完工日期:** 2026-04-16
+- **Base:** `origin/main` @ `823f1ce fix: persist console control-plane state`
 
-Which approach?
+### 交付 commit 链（15 个 commit，按时间顺序）
+
+PR-0.1 Release 推进修复：
+- `f4bcd78` fix: correct rollout stage progression
+- `1472b89` fix: add explicit release advancement
+- `da684a4` test: pin release persistence contract
+- `02db552` fix: harden release worker against duplicate ready and post-restart rollback
+
+PR-0.2 `dedup_key` / `source_system` schema：
+- `dffcaf4` feat: add work item dedup key
+- `e5edc7c` feat: mirror dedup key through sqlite dual write
+- `7c67d72` feat: add control plane dedup schema
+- `2bfe9ed` feat: promote incident dedup fields
+- `ea20622` fix: accept top-level camelCase dedupKey in legacy task input
+- `eaab54a` fix: backfill incident sourceSystem/dedupKey on later alerts
+- `2e01084` fix: resolve incident through store on ingest and verify
+
+PR-0.2.1 D3 契约收敛：
+- `92766ef` fix: strip dedup fields from incident payload_json
+
+验收工件与文稿：
+- `067d65f` test: add package 0 acceptance script
+- `f808e2e` docs: add package 0 acceptance checklist
+- `4fe7d01` docs: add layer contracts and package 0 plan
+
+### 验收结果
+
+- `python3 scripts/package_0_acceptance.py` → exit 0，输出 `stage=full status=succeeded ladder=team-only->beta->1%->5%->20%->full`
+- `python3 -m pytest tests/` → 708 passed, 1 skipped
+
+### 冻结决策的落地确认
+
+- **D1 ✔** Release 推进采用显式 `advance(work_item_id)`（`apps/release_worker/service.py`）
+- **D2 ✔** PostgreSQL 增量列使用 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`（`packages/kernel/storage/postgres.py::ensure_schema`）
+- **D3 ✔** Incident `sourceSystem` / `dedupKey` 只存独立列；`payload_json` 写入前剥离（由 PR-0.2.1 收敛，含反向断言测试）
+- **D4 ✔** dead-letter / 异常收敛未在本包引入，按计划留到包 3
+
+### 明确移交后续包的事项
+
+- event bus 统一
+- mutation 原子性抽象
+- `spawn_agent` lazy build
+- 状态机扩展
+- `(source_system, dedup_key)` 唯一性约束 / 索引
