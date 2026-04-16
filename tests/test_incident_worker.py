@@ -209,6 +209,107 @@ def test_incident_worker_backfills_source_system_and_dedup_key_on_later_alert() 
     worker.stop()
 
 
+def test_incident_worker_ingests_second_alert_against_persisted_incident_after_restart() -> None:
+    """After a restart, a new alert with the same fingerprint must update the
+    persisted incident (increment count, backfill identity) instead of creating
+    a duplicate record that overwrites history."""
+    store = InMemoryIncidentStore()
+
+    # First worker creates the incident, then stops (in-memory state lost)
+    first_em = EventManager()
+    first_em.clear_history()
+    first = IncidentWorker(event_manager=first_em, persistence_store=store)
+    first.start()
+    first_em.publish(
+        Event(
+            event_type=EventType.ALERT,
+            data={
+                "level": "error",
+                "message": "Checkout timeout in payment service",
+            },
+            source="test",
+        )
+    )
+    first_incident = first.list_incidents()[0]
+    first_incident_id = first_incident["incidentId"]
+    assert first_incident["occurrenceCount"] == 1
+    first.stop()
+
+    # Restart: new worker, same store, same fingerprint alert with identity
+    second_em = EventManager()
+    second_em.clear_history()
+    second = IncidentWorker(event_manager=second_em, persistence_store=store)
+    second.start()
+    second_em.publish(
+        Event(
+            event_type=EventType.ALERT,
+            data={
+                "level": "error",
+                "message": "Checkout timeout in payment service",
+                "sourceSystem": "sentry",
+                "dedupKey": "sentry-restart-1",
+            },
+            source="test",
+        )
+    )
+
+    stored = store.get_incident(first_incident_id)
+
+    assert stored is not None
+    assert stored["occurrenceCount"] == 2  # increment, not reset to 1
+    assert stored["sourceSystem"] == "sentry"  # backfill works after restart
+    assert stored["dedupKey"] == "sentry-restart-1"
+    # Only one incident in the store — no duplicate created
+    assert len(store.list_incidents()) == 1
+    second.stop()
+
+
+def test_incident_worker_verifies_persisted_incident_after_restart() -> None:
+    """After a restart, a verify event must resolve through the store and
+    actually close the persisted incident, instead of silently no-oping."""
+    store = InMemoryIncidentStore()
+
+    first_em = EventManager()
+    first_em.clear_history()
+    first = IncidentWorker(event_manager=first_em, persistence_store=store)
+    first.start()
+    first_em.publish(
+        Event(
+            event_type=EventType.ALERT,
+            data={
+                "level": "error",
+                "message": "Checkout timeout in payment service",
+            },
+            source="test",
+        )
+    )
+    first_incident_id = first.list_incidents()[0]["incidentId"]
+    first.stop()
+
+    # Restart worker, issue verify
+    second_em = EventManager()
+    second_em.clear_history()
+    second = IncidentWorker(event_manager=second_em, persistence_store=store)
+    second.start()
+    second_em.publish(
+        Event(
+            event_type=EventType.SYSTEM,
+            data={
+                "type": "incident_verify",
+                "incident_id": first_incident_id,
+                "resolved": True,
+            },
+            source="test",
+        )
+    )
+
+    stored = store.get_incident(first_incident_id)
+
+    assert stored is not None
+    assert stored["status"] == "closed"
+    second.stop()
+
+
 def test_incident_worker_does_not_overwrite_existing_source_system_or_dedup_key() -> None:
     """First non-null value wins and sticks; a later alert with different
     sourceSystem/dedupKey must NOT overwrite the already-set identity fields."""

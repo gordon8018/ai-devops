@@ -79,7 +79,9 @@ class IncidentWorker:
         if not message:
             return
         incident_id = self._triage_engine.fingerprint(message)
-        incident = self._incidents.get(incident_id)
+        # PR-0.4: resolve through the store so a restarted worker sees previously
+        # persisted incidents instead of treating them as new.
+        incident = self.get_incident(incident_id)
         source_system = (
             str(payload.get("sourceSystem") or payload.get("source_system") or "").strip()
             or None
@@ -124,6 +126,9 @@ class IncidentWorker:
                 incident["sourceSystem"] = source_system
             if dedup_key is not None and not incident.get("dedupKey"):
                 incident["dedupKey"] = dedup_key
+            # Keep the in-memory cache coherent with the (possibly store-fetched)
+            # incident so subsequent operations see the mutated copy.
+            self._incidents[incident_id] = incident
         incident["occurrenceCount"] += 1
         store = self._store()
         if store is not None and hasattr(store, "save_incident"):
@@ -133,11 +138,14 @@ class IncidentWorker:
         if payload.get("type") != "incident_verify":
             return
         incident_id = str(payload.get("incident_id") or "").strip()
-        incident = self._incidents.get(incident_id)
+        # PR-0.4: resolve through the store so a restarted worker can verify
+        # incidents opened in prior runs.
+        incident = self.get_incident(incident_id)
         if incident is None:
             return
         if self._verify_engine.should_close(resolved=bool(payload.get("resolved"))):
             incident["status"] = "closed"
+            self._incidents[incident_id] = incident
             store = self._store()
             if store is not None and hasattr(store, "save_incident"):
                 store.save_incident(incident)
