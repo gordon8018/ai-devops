@@ -1,0 +1,1 @@
+"""Ticket sync package placeholder."""

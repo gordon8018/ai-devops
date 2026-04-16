@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
+from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Set
@@ -48,6 +50,11 @@ class Event:
     def to_json(self) -> str:
         """Convert event to JSON string"""
         return json.dumps(self.to_dict(), ensure_ascii=False)
+
+
+def _resolve_event_journal_path() -> Path:
+    base = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
+    return base / ".clawdbot" / "event_history.jsonl"
 
 
 class EventManager:
@@ -137,6 +144,7 @@ class EventManager:
         # Store in history
         with self._lock:
             self._event_history.append(event)
+            self._append_to_journal(event)
             type_subscribers = self._subscribers.get(event.event_type, set()).copy()
             global_subscribers = self._global_subscribers.copy()
         
@@ -157,6 +165,31 @@ class EventManager:
                         pass
             except Exception as e:
                 print(f"[EventManager] Error in subscriber callback: {e}")
+
+    def _append_to_journal(self, event: Event) -> None:
+        journal_path = _resolve_event_journal_path()
+        journal_path.parent.mkdir(parents=True, exist_ok=True)
+        with journal_path.open("a", encoding="utf-8") as handle:
+            handle.write(event.to_json())
+            handle.write("\n")
+
+    def _read_journal_history(self) -> List[Dict[str, Any]]:
+        journal_path = _resolve_event_journal_path()
+        if not journal_path.exists():
+            return []
+
+        events: List[Dict[str, Any]] = []
+        for line in journal_path.read_text(encoding="utf-8").splitlines():
+            payload = line.strip()
+            if not payload:
+                continue
+            try:
+                parsed = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                events.append(parsed)
+        return events
     
     def publish_task_status(
         self,
@@ -222,19 +255,25 @@ class EventManager:
     ) -> List[Dict[str, Any]]:
         """Get recent event history"""
         with self._lock:
-            events = self._event_history.copy()
+            in_memory_events = [event.to_dict() for event in self._event_history]
+
+        events = self._read_journal_history() or in_memory_events
         
         if event_types:
-            events = [e for e in events if e.event_type in event_types]
+            allowed_types = {event_type.value for event_type in event_types}
+            events = [event for event in events if event.get("type") in allowed_types]
         
         # Return most recent events
         events = events[-limit:]
-        return [e.to_dict() for e in events]
+        return events
     
     def clear_history(self):
         """Clear event history"""
         with self._lock:
             self._event_history.clear()
+        journal_path = _resolve_event_journal_path()
+        if journal_path.exists():
+            journal_path.unlink()
 
 
 # Global event manager instance

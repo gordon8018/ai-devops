@@ -21,6 +21,14 @@ from orchestrator.bin.zoe_tools import (
 )
 
 
+def _emit_deprecation_notice() -> None:
+    print(
+        "DEPRECATED: zoe_planner.py is running in compatibility mode. "
+        "Prefer /api/work-items and /api/console for platform-native workflows.",
+        file=sys.stderr,
+    )
+
+
 def emit_json(payload: dict[str, object]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -59,6 +67,7 @@ def main() -> int:
     parser = build_arg_parser()
     args = parser.parse_args()
     base_dir = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
+    _emit_deprecation_notice()
 
     try:
         if args.command == "plan":

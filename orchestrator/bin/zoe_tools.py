@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from packages.shared.domain.models import AuditEvent
+from packages.shared.domain.runtime_state import record_audit_event
+
 from .db import get_task, merge_task_metadata, update_task
 from .dispatch import archive_subtasks, default_base_dir, dispatch_plan_file, plan_dir, tasks_dir
 from .errors import InvalidPlan, PlannerError, PolicyViolation
@@ -211,6 +214,31 @@ def build_plan_request(task_input: dict[str, Any], *, base_dir: Path | None = No
     }
 
 
+def build_work_item_session(
+    task_input: dict[str, Any],
+    *,
+    base_dir: Path | None = None,
+):
+    from packages.kernel.services.work_items import WorkItemService
+
+    service = WorkItemService()
+    session = service.create_legacy_session(task_input, base_dir=base_dir)
+    record_audit_event(
+        AuditEvent(
+            audit_event_id=f"ae_{session.work_item.work_item_id}_legacy_build_{int(time.time() * 1000)}",
+            entity_type="work_item",
+            entity_id=session.work_item.work_item_id,
+            action="legacy_entrypoint_used",
+            payload={
+                "entrypoint": "zoe_tools.build_work_item_session",
+                "repo": session.work_item.repo,
+                "title": session.work_item.title,
+            },
+        )
+    )
+    return session
+
+
 def save_plan(plan: Plan, *, base_dir: Path | None = None) -> Path:
     root = base_dir or default_base_dir()
     target_dir = plan_dir(plan, root)
@@ -228,7 +256,8 @@ def plan_task(
     base_dir: Path | None = None,
 ) -> PlanTaskResult:
     planner = engine or ZoePlannerEngine()
-    request_payload = build_plan_request(task_input, base_dir=base_dir)
+    session = build_work_item_session(task_input, base_dir=base_dir)
+    request_payload = session.plan_request
     plan = planner.plan(request_payload)
     plan_path = save_plan(plan, base_dir=base_dir)
     return PlanTaskResult(plan=plan, plan_path=plan_path)
@@ -399,4 +428,3 @@ def list_plans(*, base_dir: Path | None = None, limit: int = 10) -> dict[str, An
         if len(entries) >= limit:
             break
     return {"plans": entries}
-

@@ -14,6 +14,7 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Optional
+import sys
 
 try:
     from .config import ai_devops_home, queue_dir, repos_dir, worktrees_dir
@@ -33,13 +34,19 @@ except ImportError:
     from global_scheduler import get_global_scheduler, GlobalScheduler
 
 try:
-    from .db import init_db, get_task, insert_task, get_running_tasks
+    from .db import configure_control_plane_dual_write, init_db, get_task, insert_task, get_running_tasks
     from .process_guardian import ProcessGuardian
     from .heartbeat import update_heartbeat
 except ImportError:
-    from db import init_db, get_task, insert_task, get_running_tasks
+    from db import configure_control_plane_dual_write, init_db, get_task, insert_task, get_running_tasks
     from process_guardian import ProcessGuardian
     from heartbeat import update_heartbeat
+
+try:
+    from orchestrator.api.events import get_event_manager
+except ImportError:
+    def get_event_manager():  # type: ignore[no-redef]
+        return None
 
 
 def _agent_runner_codex() -> Path:
@@ -55,6 +62,15 @@ WORKTREES = worktrees_dir()
 
 # 导入提示词编译器（当 Zoe 未提供 prompt 时使用模板回退）
 from prompt_compiler import compile_prompt  # type: ignore
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from apps.release_worker.service import ReleaseWorker
+from apps.incident_worker.service import IncidentWorker
+from packages.kernel.runtime.services import AgentLauncher, QueueConsumer, RunStateRecorder, WorkspaceManager
+from packages.shared.domain.runtime_state import configure_runtime_persistence
 
 
 def sanitize_branch_component(value: str) -> str:
@@ -270,76 +286,55 @@ def launch_agent_process(
 
 def spawn_agent(task: dict) -> dict:
     repo_name = task["repo"]
-    repo_root = ensure_repo(repo_name)
     agent = str(task.get("agent", "codex"))
 
     # 分支 / worktree 命名
     branch = resolve_branch(task)
+    repo_root = ensure_repo(repo_name)
     wt_dir = create_worktree(repo_root, branch)
 
     # 生成提示词
-    prompt_txt = wt_dir / "prompt.txt"
     prompt = task.get("prompt") or compile_prompt(task, wt_dir)
-    prompt_txt.write_text(prompt, encoding="utf-8")
-
-    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
-    task_spec_payload = metadata.get("taskSpec") if isinstance(metadata.get("taskSpec"), dict) else None
-    task_spec_file: Path | None = None
-    scope_manifest_file: Path | None = None
-    sparse_checkout_applied = False
-    if task_spec_payload is not None:
-        task_spec_file = wt_dir / "task-spec.json"
-        task_spec_file.write_text(json.dumps(task_spec_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        scope_manifest_file = _write_scope_manifest(wt_dir, repo_root, task_spec_payload)
-        try:
-            sparse_checkout_applied = _apply_sparse_checkout_if_scoped(repo_root, wt_dir, task_spec_payload)
-        except Exception as exc:
-            raise RuntimeError(f"Failed to apply scoped sparse-checkout for {task['id']}: {exc}") from exc
+    workspace_manager = WorkspaceManager(
+        ensure_repo_fn=ensure_repo,
+        create_worktree_fn=create_worktree,
+        write_scope_manifest_fn=_write_scope_manifest,
+        apply_sparse_checkout_fn=_apply_sparse_checkout_if_scoped,
+    )
+    prepared = workspace_manager.prepare_workspace(
+        {**task, "prompt": prompt},
+        branch=branch,
+    )
 
     model = task.get("model", "gpt-5.3-codex")
     effort = task.get("effort", "high")
 
-    runner = runner_for_agent(agent)
-    if not runner.exists():
-        raise RuntimeError(f"Runner not found for agent {agent}: {runner}")
-
-    execution_mode, session, process_id = launch_agent_process(runner, task, wt_dir, prompt_txt, task_spec_file)
-
-    item = {
-        "id": task["id"],
-        "repo": repo_name,
-        "title": task.get("title", ""),
-        "branch": branch,
-        "worktree": str(wt_dir),
-        "tmuxSession": session,
-        "processId": process_id,
-        "executionMode": execution_mode,
-        "agent": agent,
-        "model": model,
-        "effort": effort,
-        "status": "running",
-        "startedAt": int(time.time() * 1000),
-        "notifyOnComplete": True,
-        "metadata": task.get("metadata", {}),
-        "planId": task.get("metadata", {}).get("planId") if isinstance(task.get("metadata"), dict) else None,
-        "subtaskId": task.get("metadata", {}).get("subtaskId") if isinstance(task.get("metadata"), dict) else None,
-        "worktreeStrategy": task.get("metadata", {}).get("worktreeStrategy") if isinstance(task.get("metadata"), dict) else None,
-        "promptSource": "task.prompt" if task.get("prompt") else "prompt_compiler",
-
-        # 重试循环控制字段
-        "attempts": 0,
-        "maxAttempts": int(task.get("maxAttempts", 3)),
-        "promptFile": str(prompt_txt),
-        "taskSpecFile": str(task_spec_file) if task_spec_file else None,
-        "scopeManifestFile": str(scope_manifest_file) if scope_manifest_file else None,
-        "sparseCheckoutApplied": sparse_checkout_applied,
-        "lastFailure": None,
-        "pr": None,
-        "prUrl": None,
-        "completedAt": None,
-        "note": None,
-    }
-    return item
+    agent_launcher = AgentLauncher(
+        runner_for_agent_fn=runner_for_agent,
+        launch_process_fn=launch_agent_process,
+    )
+    launched = agent_launcher.launch(
+        task,
+        worktree=prepared.worktree,
+        prompt_file=prepared.prompt_file,
+        task_spec_file=prepared.task_spec_file,
+    )
+    recorder = RunStateRecorder()
+    return recorder.build_running_task_record(
+        task=task,
+        branch=branch,
+        worktree=prepared.worktree,
+        execution_mode=launched.execution_mode,
+        tmux_session=launched.tmux_session,
+        process_id=launched.process_id,
+        prompt_file=prepared.prompt_file,
+        task_spec_file=prepared.task_spec_file,
+        scope_manifest_file=prepared.scope_manifest_file,
+        sparse_checkout_applied=prepared.sparse_checkout_applied,
+        agent=agent,
+        model=model,
+        effort=effort,
+    )
 
 
 
@@ -387,6 +382,8 @@ def start_api_server(port: int = 8080):
 def main() -> None:
     # 初始化 SQLite 数据库
     init_db()
+    control_plane_store = configure_control_plane_dual_write()
+    configure_runtime_persistence(store=control_plane_store)
 
     # 启动 REST API 服务器
     api_port = int(os.getenv("ZOE_API_PORT", "8080"))
@@ -403,9 +400,17 @@ def main() -> None:
         on_restart=on_restart_callback,
         on_max_restarts=on_max_restarts_callback,
     )
+    event_manager = get_event_manager()
+    release_worker = ReleaseWorker(event_manager=event_manager) if event_manager is not None else None
+    incident_worker = IncidentWorker(event_manager=event_manager) if event_manager is not None else None
+    if release_worker is not None:
+        release_worker.start()
+    if incident_worker is not None:
+        incident_worker.start()
 
     q = queue_dir()
     q.mkdir(parents=True, exist_ok=True)
+    consumer = QueueConsumer(q)
     print(f"Zoe daemon started. Watching queue: {q}")
     print(f"ProcessGuardian initialized. Monitoring agent sessions...")
 
@@ -493,9 +498,9 @@ def main() -> None:
             print(f"[GUARDIAN-ERROR] Check failed: {e}")
 
         # 队列处理
-        for p in sorted(q.glob("*.json")):
+        for p in consumer.list_queue_files():
             try:
-                task = json.loads(p.read_text(encoding="utf-8"))
+                task = consumer.load_task(p)
                 if "id" not in task or "repo" not in task:
                     raise RuntimeError(f"Invalid task JSON (missing id/repo): {p}")
 

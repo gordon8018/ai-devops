@@ -50,7 +50,7 @@ def test_complex_code_task_splits_into_multiple_ordered_subtasks() -> None:
         ("S2",),
         ("S3",),
     ]
-    assert all(subtask.worktree_strategy == "isolated" for subtask in plan.subtasks)
+    assert all(subtask.worktree_strategy == "shared" for subtask in plan.subtasks)
     assert plan.subtasks[0].files_hint == ("src/auth/session.py", "src/api/routes/auth.py")
     assert plan.subtasks[1].files_hint == ("src/api/routes/auth.py", "src/auth/session.py")
     assert plan.subtasks[2].files_hint[0] == "tests/test_auth_flow.py"
@@ -75,6 +75,7 @@ def test_simple_code_task_still_generates_implementation_and_validation() -> Non
         "Add validation and regression coverage",
     ]
     assert plan.subtasks[1].depends_on == ("S1",)
+    assert all(subtask.worktree_strategy == "shared" for subtask in plan.subtasks)
     assert plan.subtasks[0].files_hint == ("src/auth/session.py",)
     assert plan.subtasks[1].files_hint[0] == "tests/test_session_timeout.py"
     assert "src/auth/session.py" in plan.subtasks[1].files_hint

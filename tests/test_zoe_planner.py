@@ -107,6 +107,25 @@ class TestMainPlan:
 
     @patch('orchestrator.bin.zoe_planner.read_json_file')
     @patch('orchestrator.bin.zoe_planner.plan_task')
+    def test_main_plan_emits_legacy_deprecation_notice(self, mock_plan, mock_read, capsys):
+        mock_read.return_value = {"title": "Test Task"}
+        mock_result = MagicMock()
+        mock_result.to_dict.return_value = {"planId": "plan-123"}
+        mock_plan.return_value = mock_result
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            task_file = Path(tmpdir) / "task.json"
+            task_file.write_text(json.dumps({"title": "Test"}))
+
+            with patch('sys.argv', ['zoe_planner', 'plan', '--task-file', str(task_file)]):
+                result = main()
+
+        captured = capsys.readouterr()
+        assert result == 0
+        assert "DEPRECATED" in captured.err
+
+    @patch('orchestrator.bin.zoe_planner.read_json_file')
+    @patch('orchestrator.bin.zoe_planner.plan_task')
     def test_main_plan_with_policy_violation(self, mock_plan, mock_read):
         from orchestrator.bin.errors import PolicyViolation
         mock_read.return_value = {"title": "Test"}

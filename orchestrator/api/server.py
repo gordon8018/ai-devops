@@ -20,10 +20,14 @@ try:
     from .tasks import create_tasks_handler
     from .plans import create_plans_handler
     from .health import create_health_handler
+    from .console import create_console_handler
+    from .work_items import create_work_items_handler
 except ImportError:
     from tasks import create_tasks_handler
     from plans import create_plans_handler
     from health import create_health_handler
+    from console import create_console_handler
+    from work_items import create_work_items_handler
 
 # Import WebSocket and Events
 try:
@@ -74,6 +78,8 @@ class BaseAPIHandler(BaseHTTPRequestHandler):
 def create_combined_handler() -> type:
     """Create a combined handler with all API routes"""
     handler = BaseAPIHandler
+    handler = create_console_handler(handler)
+    handler = create_work_items_handler(handler)
     handler = create_tasks_handler(handler)
     handler = create_plans_handler(handler)
     handler = create_health_handler(handler)
@@ -138,6 +144,15 @@ class APIServer:
         print(f"[API]   - GET    /api/tasks/{{task_id}}")
         print(f"[API]   - POST   /api/tasks")
         print(f"[API]   - DELETE /api/tasks/{{task_id}}")
+        print(f"[API]   - GET    /api/work-items")
+        print(f"[API]   - GET    /api/work-items/{{work_item_id}}")
+        print(f"[API]   - GET    /api/console/mission-control")
+        print(f"[API]   - GET    /api/console/releases")
+        print(f"[API]   - GET    /api/console/incidents")
+        print(f"[API]   - GET    /api/console/evals")
+        print(f"[API]   - GET    /api/console/governance")
+        print(f"[API]   - GET    /api/console/work-items/{{work_item_id}}/workspace")
+        print(f"[API]   - POST   /api/work-items")
         print(f"[API]   - GET    /api/plans")
         print(f"[API]   - GET    /api/plans/{{plan_id}}")
         print(f"[API]   - POST   /api/plans/{{plan_id}}/dispatch")

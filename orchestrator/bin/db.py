@@ -19,6 +19,15 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
+from packages.kernel.storage.postgres import ControlPlanePostgresStore
+from packages.shared.domain.models import (
+    AuditEvent,
+    WorkItem,
+    WorkItemPriority,
+    WorkItemStatus,
+    WorkItemType,
+)
+
 
 _INITIAL_BASE = Path(os.getenv("AI_DEVOPS_HOME", str(Path.home() / "ai-devops")))
 
@@ -60,11 +69,163 @@ class _DynamicDBPath(os.PathLike[str]):
 
 # Module-level alias for external code that reads DB_PATH directly (e.g. tests, scripts)
 DB_PATH = _DynamicDBPath()
+_CONTROL_PLANE_STORE: Any | None = None
+
+
+def enable_control_plane_dual_write(store: Any) -> None:
+    """Enable mirrored writes into the control-plane store."""
+    global _CONTROL_PLANE_STORE
+    _CONTROL_PLANE_STORE = store
+
+
+def disable_control_plane_dual_write() -> None:
+    """Disable mirrored writes into the control-plane store."""
+    global _CONTROL_PLANE_STORE
+    _CONTROL_PLANE_STORE = None
+
+
+def _build_control_plane_store_from_dsn(dsn: str) -> Any:
+    try:
+        import psycopg  # type: ignore
+
+        return ControlPlanePostgresStore(lambda: psycopg.connect(dsn))
+    except ImportError:
+        try:
+            import psycopg2  # type: ignore
+
+            return ControlPlanePostgresStore(lambda: psycopg2.connect(dsn))
+        except ImportError as exc:
+            raise RuntimeError("PostgreSQL dual-write requested but neither psycopg nor psycopg2 is installed") from exc
+
+
+def configure_control_plane_dual_write(
+    *,
+    store: Any | None = None,
+    dsn: str | None = None,
+) -> Any | None:
+    """Configure control-plane mirroring using an explicit store or env/DSN."""
+    if store is not None:
+        enable_control_plane_dual_write(store)
+        return store
+
+    resolved_dsn = dsn or os.getenv("AI_DEVOPS_CONTROL_PLANE_DSN", "").strip()
+    if not resolved_dsn:
+        return None
+
+    control_plane_store = _build_control_plane_store_from_dsn(resolved_dsn)
+    enable_control_plane_dual_write(control_plane_store)
+    return control_plane_store
+
+
+def _map_work_item_status(task_status: str) -> WorkItemStatus:
+    normalized = str(task_status or "queued").strip().lower()
+    if normalized == "planning":
+        return WorkItemStatus.PLANNING
+    if normalized in {"running", "retrying", "pr_created"}:
+        return WorkItemStatus.RUNNING
+    if normalized in {"ready", "merged"}:
+        return WorkItemStatus.READY
+    if normalized == "released":
+        return WorkItemStatus.RELEASED
+    if normalized in {"closed", "completed", "done"}:
+        return WorkItemStatus.CLOSED
+    if normalized in {
+        "blocked",
+        "failed",
+        "agent_dead",
+        "agent_failed",
+        "needs_rebase",
+        "pr_closed",
+        "killed",
+    }:
+        return WorkItemStatus.BLOCKED
+    return WorkItemStatus.QUEUED
+
+
+def _map_work_item_priority(value: Any) -> WorkItemPriority:
+    normalized = str(value or "medium").strip().lower()
+    if normalized == "low":
+        return WorkItemPriority.LOW
+    if normalized == "high":
+        return WorkItemPriority.HIGH
+    if normalized == "critical":
+        return WorkItemPriority.CRITICAL
+    return WorkItemPriority.MEDIUM
+
+
+def _build_work_item_from_task(task: dict[str, Any]) -> WorkItem:
+    metadata = _parse_metadata(task.get("metadata"))
+    constraints = metadata.get("constraints")
+    if not isinstance(constraints, dict):
+        constraints = {}
+
+    acceptance = metadata.get("acceptanceCriteria")
+    if not isinstance(acceptance, (list, tuple)):
+        acceptance = ()
+
+    explicit_type = str(task.get("type") or metadata.get("type") or "feature").strip().lower()
+    work_item_type = {
+        "feature": WorkItemType.FEATURE,
+        "bugfix": WorkItemType.BUGFIX,
+        "incident": WorkItemType.INCIDENT,
+        "release_note": WorkItemType.RELEASE_NOTE,
+        "experiment": WorkItemType.EXPERIMENT,
+        "ops": WorkItemType.OPS,
+    }.get(explicit_type, WorkItemType.FEATURE)
+
+    return WorkItem(
+        work_item_id=str(task["id"]),
+        type=work_item_type,
+        title=str(task.get("title") or ""),
+        goal=str(task.get("note") or task.get("title") or ""),
+        priority=_map_work_item_priority(task.get("priority") or metadata.get("priority")),
+        status=_map_work_item_status(task.get("status", "queued")),
+        repo=str(task.get("repo") or ""),
+        constraints=constraints,
+        acceptance_criteria=tuple(str(item) for item in acceptance if str(item).strip()),
+        requested_by=str(metadata.get("requestedBy") or metadata.get("requested_by") or "sqlite"),
+        requested_at=int(task.get("created_at") or int(time.time() * 1000)),
+        source="sqlite_dual_write",
+        metadata={
+            "legacyTaskId": task.get("id"),
+            "planId": task.get("plan_id"),
+            "attempts": task.get("attempts"),
+            "maxAttempts": task.get("max_attempts"),
+            "sqlite": {
+                "status": task.get("status"),
+                "branch": task.get("branch"),
+                "tmuxSession": task.get("tmux_session"),
+            },
+            "metadata": metadata,
+        },
+    )
+
+
+def _mirror_task_to_control_plane(task: dict[str, Any], *, action: str) -> None:
+    if _CONTROL_PLANE_STORE is None:
+        return
+
+    work_item = _build_work_item_from_task(task)
+    _CONTROL_PLANE_STORE.save_work_item(work_item)
+    _CONTROL_PLANE_STORE.save_audit_event(
+        AuditEvent(
+            audit_event_id=f"ae_{task['id']}_{action}_{int(time.time() * 1000)}",
+            entity_type="work_item",
+            entity_id=work_item.work_item_id,
+            action=action,
+            payload={
+                "taskId": task["id"],
+                "status": task.get("status"),
+                "repo": task.get("repo"),
+            },
+        )
+    )
 
 
 @contextmanager
 def get_db():
     """Get database connection with row factory"""
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(os.fspath(DB_PATH))
     conn.row_factory = sqlite3.Row
     try:
@@ -256,6 +417,7 @@ def insert_task(task: dict) -> None:
             int(time.time() * 1000),
         ))
         conn.commit()
+    _mirror_task_to_control_plane(get_task(task["id"]) or task, action="sqlite_task_inserted")
 
 
 def get_task(task_id: str) -> Optional[dict]:
@@ -421,6 +583,23 @@ def update_task(task_id: str, updates: dict) -> None:
             values
         )
         conn.commit()
+    latest = get_task(task_id)
+    if latest is not None:
+        _mirror_task_to_control_plane(latest, action="sqlite_task_updated")
+        status = updates.get("status")
+        if status is not None:
+            from orchestrator.api.events import get_event_manager
+
+            get_event_manager().publish_task_status(
+                task_id,
+                str(status),
+                {
+                    "note": latest.get("note"),
+                    "plan_id": latest.get("plan_id"),
+                    "repo": latest.get("repo"),
+                },
+                source="sqlite_db",
+            )
 
 
 def update_task_status(task_id: str, status: str, note: Optional[str] = None) -> None:

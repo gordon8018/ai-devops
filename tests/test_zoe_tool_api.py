@@ -76,6 +76,8 @@ class TestSuccessFailure:
         result = _success("test_tool", {"data": "value"})
         assert result["ok"] is True
         assert result["tool"] == "test_tool"
+        assert result["governance"]["legacyCompatibility"]["status"] == "deprecated"
+        assert result["governance"]["legacyCompatibility"]["preferredEntrypoint"] == "/api/work-items"
 
     def test_failure_returns_dict(self):
         exc = Exception("Test error")

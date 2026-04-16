@@ -286,6 +286,48 @@ class TestMonitorTaskChecking(unittest.TestCase):
         self.assertEqual(updated_task["status"], "blocked")
         self.assertIn("taskSpec filesHint", updated_task["note"])
 
+    @patch("monitor.review_pr")
+    @patch("monitor.pr_info", return_value={"number": 7, "url": "https://example/pr/7", "state": "OPEN"})
+    @patch("monitor.tmux_alive", return_value=True)
+    def test_pr_created_path_emits_task_status_event(self, mock_tmux, mock_pr, mock_review):
+        task = make_task(id="test-task-pr", worktree=str(self.worktree))
+        insert_task(task)
+        emitted = []
+        with patch("monitor._emit_task_status_event", side_effect=lambda task_id, status, details=None: emitted.append((task_id, status, details)), create=True):
+            check_all_tasks(set())
+        self.assertIn(("test-task-pr", "pr_created", {"pr_number": 7}), emitted)
+
+    @patch("monitor.restart_agent")
+    @patch("monitor._build_retry_prompt", return_value=Path("/tmp/prompt.retry1.txt"))
+    @patch("monitor.latest_run_failure", return_value="")
+    @patch("monitor.analyze_checks", return_value=(False, "tests:FAILURE", False))
+    @patch("monitor.merge_clean", return_value=False)
+    @patch("monitor.pr_info", return_value={"number": 8, "url": "https://example/pr/8", "state": "OPEN"})
+    @patch("monitor.tmux_alive", return_value=True)
+    def test_retry_path_emits_task_status_event(
+        self,
+        mock_tmux,
+        mock_pr,
+        mock_merge,
+        mock_analyze,
+        mock_failure,
+        mock_retry_prompt,
+        mock_restart,
+    ):
+        task = make_task(
+            id="test-task-retry-event",
+            status="pr_created",
+            worktree=str(self.worktree),
+            attempts=0,
+            maxAttempts=3,
+        )
+        insert_task(task)
+        emitted = []
+        with patch("monitor._write_failure_log"), \
+             patch("monitor._emit_task_status_event", side_effect=lambda task_id, status, details=None: emitted.append((task_id, status, details)), create=True):
+            check_all_tasks(set())
+        self.assertIn(("test-task-retry-event", "running", {"attempts": 1}), emitted)
+
 
 class TestMonitorIntegration(unittest.TestCase):
     """Integration-style monitor tests (TestCase style)."""
