@@ -82,6 +82,7 @@ class WorkItem:
     requested_at: int = 0
     source: str = "platform"
     metadata: dict[str, Any] = field(default_factory=dict)
+    dedup_key: str | None = None
 
     @classmethod
     def from_legacy_task_input(cls, task_input: dict[str, Any]) -> "WorkItem":
@@ -115,6 +116,10 @@ class WorkItem:
         if not isinstance(acceptance, (list, tuple)):
             acceptance = ()
 
+        raw_dedup = task_input.get("dedupKey") or task_input.get("dedup_key")
+        dedup_key = str(raw_dedup).strip() if raw_dedup is not None else ""
+        dedup_key = dedup_key or None
+
         return cls(
             work_item_id=str(task_input.get("workItemId") or _make_id("wi", repo, title, str(requested_at))),
             type=work_item_type,
@@ -135,6 +140,7 @@ class WorkItem:
                     if key not in {"contextPack", "workItem"}
                 }
             },
+            dedup_key=dedup_key,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -152,6 +158,7 @@ class WorkItem:
             "requestedAt": self.requested_at,
             "source": self.source,
             "metadata": self.metadata,
+            "dedupKey": self.dedup_key,
         }
 
 

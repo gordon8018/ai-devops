@@ -143,3 +143,49 @@ def test_release_transition_accepts_passed_quality_run() -> None:
     )
 
     assert transitioned.status is WorkItemStatus.CLOSED
+
+
+def test_work_item_from_legacy_task_input_preserves_dedup_key() -> None:
+    from packages.shared.domain.models import WorkItem
+
+    work_item_camel = WorkItem.from_legacy_task_input(
+        {
+            "repo": "acme/platform",
+            "title": "Dedup via camelCase",
+            "description": "Should preserve dedupKey from camelCase input",
+            "dedupKey": "incident-42",
+        }
+    )
+    assert work_item_camel.dedup_key == "incident-42"
+    assert work_item_camel.to_dict()["dedupKey"] == "incident-42"
+
+    work_item_snake = WorkItem.from_legacy_task_input(
+        {
+            "repo": "acme/platform",
+            "title": "Dedup via snake_case",
+            "description": "Should also accept snake_case dedup_key",
+            "dedup_key": "  incident-42  ",
+        }
+    )
+    assert work_item_snake.dedup_key == "incident-42"
+
+    work_item_empty = WorkItem.from_legacy_task_input(
+        {
+            "repo": "acme/platform",
+            "title": "Missing dedup key",
+            "description": "Empty/whitespace dedup keys should drop to None",
+            "dedup_key": "   ",
+        }
+    )
+    assert work_item_empty.dedup_key is None
+    assert work_item_empty.to_dict()["dedupKey"] is None
+
+    work_item_absent = WorkItem.from_legacy_task_input(
+        {
+            "repo": "acme/platform",
+            "title": "Absent dedup key",
+            "description": "No dedup key at all",
+        }
+    )
+    assert work_item_absent.dedup_key is None
+    assert work_item_absent.to_dict()["dedupKey"] is None
