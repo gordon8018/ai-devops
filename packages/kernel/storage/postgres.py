@@ -190,6 +190,14 @@ class ControlPlanePostgresStore:
             )
             conn.commit()
 
+    def delete_work_item(self, work_item_id: str) -> None:
+        with self._connection_factory() as conn:
+            conn.cursor().execute(
+                "DELETE FROM work_items WHERE work_item_id = %s",
+                (work_item_id,),
+            )
+            conn.commit()
+
     def save_context_pack(self, context_pack: ContextPack) -> None:
         with self._connection_factory() as conn:
             conn.cursor().execute(
@@ -223,6 +231,14 @@ class ControlPlanePostgresStore:
             )
             conn.commit()
 
+    def delete_context_pack(self, work_item_id: str) -> None:
+        with self._connection_factory() as conn:
+            conn.cursor().execute(
+                "DELETE FROM context_packs WHERE work_item_id = %s",
+                (work_item_id,),
+            )
+            conn.commit()
+
     def save_release(self, release: dict) -> None:
         with self._connection_factory() as conn:
             conn.cursor().execute(
@@ -241,6 +257,14 @@ class ControlPlanePostgresStore:
                     release["status"],
                     json.dumps(release, ensure_ascii=False, sort_keys=True),
                 ),
+            )
+            conn.commit()
+
+    def delete_release(self, work_item_id: str) -> None:
+        with self._connection_factory() as conn:
+            conn.cursor().execute(
+                "DELETE FROM releases WHERE work_item_id = %s",
+                (work_item_id,),
             )
             conn.commit()
 
@@ -275,6 +299,14 @@ class ControlPlanePostgresStore:
                     incident.get("sourceSystem"),
                     incident.get("dedupKey"),
                 ),
+            )
+            conn.commit()
+
+    def delete_incident(self, incident_id: str) -> None:
+        with self._connection_factory() as conn:
+            conn.cursor().execute(
+                "DELETE FROM incidents WHERE incident_id = %s",
+                (incident_id,),
             )
             conn.commit()
 
