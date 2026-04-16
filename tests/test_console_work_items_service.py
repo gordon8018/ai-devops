@@ -93,6 +93,28 @@ def test_console_application_service_creates_platform_native_payload() -> None:
     assert recorded_audits[0]["action"] == "work_item_created"
 
 
+def test_console_application_service_bridges_domain_events_to_event_manager() -> None:
+    event_manager = EventManager()
+    event_manager.clear_history()
+    service = WorkItemsApplicationService()
+
+    service.create_work_item(
+        {
+            "repo": "acme/platform",
+            "title": "Bridge console events",
+            "description": "Console path should publish bridged domain events",
+        }
+    )
+
+    history = event_manager.get_history(limit=3)
+
+    assert [event["eventName"] for event in history] == [
+        "work_item.created",
+        "context_pack.created",
+        "plan.requested",
+    ]
+
+
 def test_console_application_service_returns_context_pack_by_work_item_id() -> None:
     service = WorkItemsApplicationService()
     result = service.create_work_item(

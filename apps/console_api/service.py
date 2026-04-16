@@ -31,7 +31,7 @@ class WorkItemsApplicationService:
         persistence_store: Any | None = None,
     ) -> None:
         self._service = WorkItemService(
-            event_bus=InMemoryEventBus(),
+            event_bus=InMemoryEventBus(event_manager=get_event_manager()),
             context_assembler=ContextPackAssembler(),
         )
         self._records: dict[str, dict] = {}
