@@ -1,7 +1,7 @@
-# 六层架构契约 (Layer Contracts)
+# 七层架构契约 (Layer Contracts)
 
-> 版本：`v0.1-draft`
-> 状态：契约领先于实现，已知未达标项集中在 §8.3
+> 版本：`v2.0`
+> 状态：Agent SDK 层已落地 (2026-04-18)，原六层升级为七层
 
 ---
 
@@ -24,16 +24,17 @@
 
 ## 1. 层与横切关注点
 
-### 1.1 六个纵向层
+### 1.1 七个纵向层
 
 | 层 | 职责 | 主入口代码 |
 |---|---|---|
+| `Console` | API 聚合 + Web UI | `apps/console_api/` + `apps/console-web/` |
+| `Agent SDK` | LLM 执行引擎 + 工具 + 护栏 + 追踪 (2.0 新增) | `packages/agent_sdk/` |
 | `Kernel` | 计划 + 派发 + 执行 + 监控 | `packages/kernel/` + `orchestrator/bin/` |
 | `Context` | 代码图谱 + 文档索引 + 上下文装配 | `packages/context/` |
 | `Quality` | 门禁 + AI review + 评估 | `packages/quality/` |
 | `Release` | flag + rollout + rollback | `packages/release/` + `apps/release_worker/` |
 | `Incident` | 摄取 + 聚类 + 工单 + 验证 | `packages/incident/` + `apps/incident_worker/` |
-| `Console` | API 聚合 + Web UI | `apps/console_api/` + `apps/console-web/` |
 
 ### 1.2 三个横切关注点（不是层）
 
@@ -57,7 +58,9 @@
 | `ContextPack` | **Context** | 创建即冻结，immutable |
 | `Plan` / `Subtask` | **Kernel** | 从 WorkItem 派生 |
 | `AgentRun` / `RunStep` | **Kernel** | 从 Subtask 派生 |
-| `QualityRun` / `ReviewFinding` | **Quality** | 绑定到 AgentRun 或 Plan |
+| `AgentRunResult` | **Agent SDK** | 可变包装器（AgentRun + ReviewFindings + token_usage） |
+| `ReviewFinding` | **共享域** | 护栏/审查发现，由 Agent SDK 护栏产出 |
+| `QualityRun` | **Quality** | 绑定到 AgentRun 或 Plan |
 | `Release` | **Release** | 绑定到 WorkItem，1:1 或 1:N |
 | `Incident` / `Ticket` | **Incident** | 从 alert 生成，可反向引用 WorkItem |
 | `EvalRun` | **Eval**（横切） | 按周期或按事件触发 |

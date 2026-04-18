@@ -1,8 +1,8 @@
-# Ralph 集成系统文档索引
+# AI-DevOps 2.0 文档索引
 
 ## 文档导航
 
-本文档提供 Ralph 集成系统的完整文档索引和快速导航。
+本文档提供 AI-DevOps 2.0 系统的完整文档索引和快速导航。
 
 ---
 
@@ -11,8 +11,10 @@
 ### 新手入门
 
 1. **阅读顺序**
-   - [RALPH_ARCHITECTURE.md](./RALPH_ARCHITECTURE.md) - 了解系统架构
-   - [RALPH_INTEGRATION.md](./RALPH_INTEGRATION.md) - 集成快速入门
+   - [README.md](../README.md) - 项目概览与 2.0 新能力
+   - [Agent SDK 整合设计](./superpowers/specs/2026-04-18-agents-sdk-integration-design.md) - 了解 2.0 架构设计
+   - [架构层级合约](./architecture/layer-contracts.md) - 七层架构契约
+   - [RALPH_ARCHITECTURE.md](./RALPH_ARCHITECTURE.md) - 了解遗留系统架构
    - [TASK_SPEC_TEMPLATE.md](./TASK_SPEC_TEMPLATE.md) - 查看任务模板
 
 2. **快速链接**

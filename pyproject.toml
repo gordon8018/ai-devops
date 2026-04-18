@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-devops"
-version = "0.1.0"
-description = "Local deterministic tool layer for planning, dispatching, and monitoring coding-agent worktrees."
+version = "2.0.0"
+description = "Intelligent agent engineering operations system for product delivery, powered by OpenAI Agents SDK."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
