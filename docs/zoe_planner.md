@@ -170,5 +170,5 @@ This adapter is no longer the intended long-term AI entrypoint. In the target ar
 - `POLICY_VIOLATION`: the task description matched the injection/exfiltration filter and was blocked before planning.
 - `PLANNER_ERROR`: Zoe generated a plan request or plan payload that failed schema validation.
 - Queue files created but nothing starts: check `orchestrator/bin/zoe-daemon.py`, the configured runner path, and whether `CODEX_BIN` or the service `PATH` can resolve `codex`.
-- The machine does not have `tmux`: Zoe falls back to a detached background process. `agents/run-codex-agent.sh` still creates a PTY with `script`, so Codex can run without tmux.
+- The machine does not have `tmux`: Zoe falls back to a detached background process. `agent_scripts/run-codex-agent.sh` still creates a PTY with `script`, so Codex can run without tmux.
 - Downstream subtasks are not appearing: run the dispatcher in watch mode or inspect `dispatch-state.json` and `~/.clawdbot/active-tasks.json`.

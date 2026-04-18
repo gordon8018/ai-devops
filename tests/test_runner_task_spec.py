@@ -10,7 +10,7 @@ def test_run_codex_agent_requires_task_spec_when_flagged(tmp_path):
     worktree.mkdir()
     prompt = worktree / "prompt.txt"
     prompt.write_text("hello", encoding="utf-8")
-    runner = Path(__file__).resolve().parents[1] / "agents" / "run-codex-agent.sh"
+    runner = Path(__file__).resolve().parents[1] / "agent_scripts" / "run-codex-agent.sh"
 
     env = os.environ.copy()
     env["HOME"] = str(tmp_path)
@@ -37,7 +37,7 @@ def test_run_codex_agent_requires_scope_manifest_if_declared(tmp_path):
     prompt.write_text("hello", encoding="utf-8")
     task_spec = worktree / "task-spec.json"
     task_spec.write_text('{"allowedPaths": ["skills/**"]}', encoding="utf-8")
-    runner = Path(__file__).resolve().parents[1] / "agents" / "run-codex-agent.sh"
+    runner = Path(__file__).resolve().parents[1] / "agent_scripts" / "run-codex-agent.sh"
 
     env = os.environ.copy()
     env["HOME"] = str(tmp_path)

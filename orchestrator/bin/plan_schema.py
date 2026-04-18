@@ -2,10 +2,22 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from enum import Enum
 import json
 import re
 from pathlib import Path
 from typing import Any, List
+
+
+class TaskType(str, Enum):
+    CODE_GENERATION = "code_generation"
+    CODE_REVIEW = "code_review"
+    BUG_FIX = "bug_fix"
+    REFACTOR = "refactor"
+    DOCUMENTATION = "documentation"
+    TEST_GENERATION = "test_generation"
+    PLANNING = "planning"
+    INCIDENT_ANALYSIS = "incident_analysis"
 
 try:
     from .errors import InvalidPlan
@@ -100,6 +112,7 @@ class Subtask:
     files_hint: tuple[str, ...] = field(default_factory=tuple)
     prompt: str = ""
     definition_of_done: tuple[str, ...] = field(default_factory=tuple)
+    task_type: TaskType = TaskType.CODE_GENERATION
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], routing: RoutingDefaults) -> "Subtask":
@@ -134,6 +147,9 @@ class Subtask:
         files_hint = _optional_string_list(data, "filesHint")
         definition_of_done = _optional_string_list(data, "definitionOfDone")
 
+        raw_task_type = _optional_string(data, "taskType")
+        task_type = TaskType(raw_task_type) if raw_task_type else TaskType.CODE_GENERATION
+
         return cls(
             id=subtask_id,
             title=_require_string(data, "title"),
@@ -146,6 +162,7 @@ class Subtask:
             files_hint=files_hint,
             prompt=prompt,
             definition_of_done=definition_of_done,
+            task_type=task_type,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -161,6 +178,7 @@ class Subtask:
             "filesHint": list(self.files_hint),
             "prompt": self.prompt,
             "definitionOfDone": list(self.definition_of_done),
+            "taskType": self.task_type.value,
         }
 
 

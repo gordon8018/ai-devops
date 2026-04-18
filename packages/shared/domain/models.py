@@ -215,6 +215,17 @@ class AgentRun:
 
 
 @dataclass(slots=True, frozen=True)
+class ReviewFinding:
+    """A finding from a guardrail or code review check."""
+    finding_id: str
+    category: str
+    severity: str
+    message: str
+    source_guardrail: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True, frozen=True)
 class AuditEvent:
     audit_event_id: str
     entity_type: str

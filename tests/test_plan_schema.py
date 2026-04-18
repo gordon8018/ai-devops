@@ -1,7 +1,7 @@
 import pytest
 
 from orchestrator.bin.errors import InvalidPlan
-from orchestrator.bin.plan_schema import PROMPT_MAX_CHARS, Plan
+from orchestrator.bin.plan_schema import PROMPT_MAX_CHARS, Plan, Subtask, TaskType
 
 
 def make_plan_payload() -> dict:
@@ -76,3 +76,37 @@ def test_prompt_limit_fails() -> None:
 
     with pytest.raises(InvalidPlan, match="Prompt too long"):
         Plan.from_dict(payload)
+
+
+def test_subtask_has_task_type_field():
+    """Subtask should have a task_type field with default CODE_GENERATION."""
+    subtask = Subtask(
+        id="s1",
+        title="Test",
+        description="Test subtask",
+        agent="codex",
+        model="gpt-5.4",
+        effort="medium",
+        worktree_strategy="shared",
+    )
+    assert subtask.task_type == TaskType.CODE_GENERATION
+
+
+def test_task_type_enum_values():
+    """TaskType enum should have all expected values."""
+    expected = {
+        "code_generation", "code_review", "bug_fix", "refactor",
+        "documentation", "test_generation", "planning", "incident_analysis",
+    }
+    actual = {t.value for t in TaskType}
+    assert actual == expected
+
+
+def test_subtask_with_explicit_task_type():
+    """Subtask should accept explicit task_type."""
+    subtask = Subtask(
+        id="s1", title="Review", description="Code review",
+        agent="claude", model="claude-opus-4-6", effort="low",
+        worktree_strategy="shared", task_type=TaskType.CODE_REVIEW,
+    )
+    assert subtask.task_type == TaskType.CODE_REVIEW

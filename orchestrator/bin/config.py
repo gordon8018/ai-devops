@@ -15,7 +15,7 @@ __all__ = [
     "queue_dir",
     "repos_dir",
     "worktrees_dir",
-    "agents_dir",
+    "agent_scripts_dir",
 ]
 
 
@@ -39,5 +39,5 @@ def worktrees_dir() -> Path:
     return ai_devops_home() / "worktrees"
 
 
-def agents_dir() -> Path:
-    return ai_devops_home() / "agents"
+def agent_scripts_dir() -> Path:
+    return ai_devops_home() / "agent_scripts"

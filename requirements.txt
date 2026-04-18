@@ -1,2 +1,5 @@
 requests>=2.31
 schedule>=1.2
+openai-agents>=0.14
+litellm>=1.40
+mcp>=1.19

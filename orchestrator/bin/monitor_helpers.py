@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 try:
-    from .config import agents_dir, logs_dir
+    from .config import agent_scripts_dir, logs_dir
 except ImportError:
-    from config import agents_dir, logs_dir
+    from config import agent_scripts_dir, logs_dir
 
 
 try:
@@ -23,11 +23,11 @@ except ImportError:
 
 
 def runner_codex() -> str:
-    return str(Path(os.getenv("CODEX_RUNNER_PATH", str(agents_dir() / "run-codex-agent.sh"))))
+    return str(Path(os.getenv("CODEX_RUNNER_PATH", str(agent_scripts_dir() / "run-codex-agent.sh"))))
 
 
 def runner_claude() -> str:
-    return str(Path(os.getenv("CLAUDE_RUNNER_PATH", str(agents_dir() / "run-claude-agent.sh"))))
+    return str(Path(os.getenv("CLAUDE_RUNNER_PATH", str(agent_scripts_dir() / "run-claude-agent.sh"))))
 
 
 def sh(cmd: list[str], cwd: Optional[Path] = None, check: bool = False) -> str:

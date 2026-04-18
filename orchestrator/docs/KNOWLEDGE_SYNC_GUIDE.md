@@ -31,7 +31,7 @@ Edit `bin/knowledge_config.json` to customize:
 | Task Reports | progress.txt | `reports/` |
 | Code Reviews | Quality gate output | `reviews/` |
 | Decision Records | prd.json, key decisions | `decisions/` |
-| AGENTS.md | Workspace AGENTS.md | `agents/` |
+| AGENTS.md | Workspace AGENTS.md | `agent_scripts/` |
 
 ## Manual Sync
 

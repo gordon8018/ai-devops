@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 try:
-    from .config import agents_dir
+    from .config import agent_scripts_dir
 except ImportError:
-    from config import agents_dir
+    from config import agent_scripts_dir
 
 
 # ============================================================================
@@ -265,10 +265,10 @@ class TmuxManager:
         
         # ========== 确定 runner 脚本 ==========
         if agent == "claude":
-            runner = str(agents_dir() / "run-claude-agent.sh")
+            runner = str(agent_scripts_dir() / "run-claude-agent.sh")
             default_model = "claude-sonnet-4"
         else:  # agent == "codex"
-            runner = str(agents_dir() / "run-codex-agent.sh")
+            runner = str(agent_scripts_dir() / "run-codex-agent.sh")
             default_model = "gpt-5.3-codex"
         
         runner_path = Path(runner)

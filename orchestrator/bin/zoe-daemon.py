@@ -51,11 +51,11 @@ except ImportError:
 
 
 def _agent_runner_codex() -> Path:
-    return Path(os.getenv("CODEX_RUNNER_PATH", str(ai_devops_home() / "agents" / "run-codex-agent.sh")))
+    return Path(os.getenv("CODEX_RUNNER_PATH", str(ai_devops_home() / "agent_scripts" / "run-codex-agent.sh")))
 
 
 def _agent_runner_claude() -> Path:
-    return Path(os.getenv("CLAUDE_RUNNER_PATH", str(ai_devops_home() / "agents" / "run-claude-agent.sh")))
+    return Path(os.getenv("CLAUDE_RUNNER_PATH", str(ai_devops_home() / "agent_scripts" / "run-claude-agent.sh")))
 
 
 # Module-level aliases kept for test monkeypatching compatibility

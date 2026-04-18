@@ -208,7 +208,7 @@ packages/      平台包与领域实现
 orchestrator/  兼容层与已验证内核
 infra/         Docker / GitHub Actions / Terraform / K8s
 docs/          架构、运行手册、API、最佳实践
-agents/        Agent runner 脚本
+agent_scripts/ Agent runner 脚本
 scripts/       本地辅助脚本
 tests/         主测试集
 ```
