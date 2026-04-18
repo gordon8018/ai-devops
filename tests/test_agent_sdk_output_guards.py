@@ -38,3 +38,16 @@ def test_forbidden_path_guard_passes_allowed_paths():
         written_paths=["src/main.py"], forbidden_paths=["secrets/"],
     )
     assert result.tripwire_triggered is False
+
+
+def test_output_format_guard_detects_missing_field():
+    from packages.agent_sdk.guardrails.output_guards import OutputFormatGuard
+    result = OutputFormatGuard.check({"name": "test"}, ["name", "status"])
+    assert len(result.risks) == 1
+    assert "status" in result.risks[0]
+
+
+def test_output_format_guard_passes_complete():
+    from packages.agent_sdk.guardrails.output_guards import OutputFormatGuard
+    result = OutputFormatGuard.check({"name": "test", "status": "ok"}, ["name", "status"])
+    assert len(result.risks) == 0

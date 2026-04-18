@@ -39,3 +39,21 @@ def test_collector_aggregates():
     agg = TokenUsageCollector.aggregate(runs)
     assert agg["total_tokens"] == 450
     assert agg["run_count"] == 2
+
+
+def test_collector_includes_cost_estimate():
+    from packages.agent_sdk.tracing.usage_collector import TokenUsageCollector
+
+    @dataclass
+    class FakeUsage:
+        input_tokens: int = 1_000_000
+        output_tokens: int = 500_000
+        total_tokens: int = 1_500_000
+
+    @dataclass
+    class FakeResult:
+        usage: FakeUsage = None
+
+    usage = TokenUsageCollector.extract(FakeResult(usage=FakeUsage()), model="gpt-5.4", duration=10.0)
+    assert usage["cost_estimate"] > 0
+    assert "cost_estimate" in usage

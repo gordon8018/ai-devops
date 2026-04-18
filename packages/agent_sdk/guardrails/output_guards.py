@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from packages.agent_sdk.guardrails.input_guards import _SECRET_PATTERNS
 
@@ -62,3 +63,24 @@ class ForbiddenPathGuard:
         if violations:
             return ForbiddenPathResult(tripwire_triggered=True, message=f"{len(violations)} violations", violations=violations)
         return ForbiddenPathResult(tripwire_triggered=False)
+
+
+class OutputFormatGuard:
+    """Validate structured output has required fields. Warns but does not abort."""
+
+    @staticmethod
+    def check(output: Any, required_fields: list[str]) -> CodeSafetyResult:
+        if not required_fields:
+            return CodeSafetyResult()
+        missing: list[str] = []
+        if isinstance(output, dict):
+            for f in required_fields:
+                if f not in output:
+                    missing.append(f"Missing required field: {f}")
+        elif hasattr(output, "__dict__"):
+            for f in required_fields:
+                if not hasattr(output, f):
+                    missing.append(f"Missing required attribute: {f}")
+        else:
+            missing.append(f"Output is not structured (type: {type(output).__name__})")
+        return CodeSafetyResult(risks=tuple(missing))

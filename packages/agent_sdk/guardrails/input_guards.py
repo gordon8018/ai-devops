@@ -47,3 +47,26 @@ class SensitiveDataGuard:
             if pattern.search(text):
                 warnings.append(f"Potential {name} detected in input")
         return GuardrailResult(tripwire_triggered=False, warnings=tuple(warnings))
+
+
+# Common prompt injection patterns
+_INJECTION_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("role override", re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.IGNORECASE)),
+    ("system prompt leak", re.compile(r"(print|show|reveal|output)\s+(your\s+)?(system\s+prompt|instructions)", re.IGNORECASE)),
+    ("jailbreak attempt", re.compile(r"(you\s+are\s+now|act\s+as|pretend\s+to\s+be)\s+", re.IGNORECASE)),
+    ("delimiter injection", re.compile(r"```\s*(system|assistant)\s*\n", re.IGNORECASE)),
+]
+
+
+class PromptInjectionGuard:
+    """Detect prompt injection attempts in agent input. Triggers tripwire on detection."""
+
+    @staticmethod
+    def check(text: str) -> GuardrailResult:
+        for name, pattern in _INJECTION_PATTERNS:
+            if pattern.search(text):
+                return GuardrailResult(
+                    tripwire_triggered=True,
+                    message=f"Prompt injection detected: {name}",
+                )
+        return GuardrailResult(tripwire_triggered=False)
