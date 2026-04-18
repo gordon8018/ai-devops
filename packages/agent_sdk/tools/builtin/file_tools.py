@@ -8,7 +8,7 @@ from pathlib import Path
 def _validate_path(file_path: str, workspace: str) -> Path:
     resolved = Path(file_path).resolve()
     ws_resolved = Path(workspace).resolve()
-    if not str(resolved).startswith(str(ws_resolved)):
+    if not resolved.is_relative_to(ws_resolved):
         raise PermissionError(f"Path {file_path} is outside workspace {workspace}")
     return resolved
 

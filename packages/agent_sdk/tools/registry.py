@@ -30,10 +30,14 @@ def run_command(command: str, workspace: str = ".") -> str:
 
 @function_tool
 def search_code(pattern: str, workspace: str = ".", file_glob: str = "") -> str:
-    """Search for a pattern in code files."""
-    cmd = f"grep -rn '{pattern}' ."
+    """Search for a pattern in code files using grep."""
+    import shlex
+    safe_pattern = shlex.quote(pattern)
     if file_glob:
-        cmd = f"grep -rn --include='{file_glob}' '{pattern}' ."
+        safe_glob = shlex.quote(file_glob)
+        cmd = f"grep -rn --include={safe_glob} {safe_pattern} ."
+    else:
+        cmd = f"grep -rn {safe_pattern} ."
     return run_command_impl(cmd, workspace)
 
 @function_tool

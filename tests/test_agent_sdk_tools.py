@@ -38,3 +38,21 @@ def test_run_command_rejects_non_whitelisted(tmp_path):
     from packages.agent_sdk.tools.builtin.command_tools import run_command_impl
     with pytest.raises(PermissionError):
         run_command_impl("curl http://evil.com", str(tmp_path))
+
+
+def test_run_command_rejects_shell_metacharacters(tmp_path):
+    from packages.agent_sdk.tools.builtin.command_tools import run_command_impl
+    with pytest.raises(PermissionError, match="metacharacter"):
+        run_command_impl("echo hello; curl http://evil.com", str(tmp_path))
+
+
+def test_run_command_rejects_pipe(tmp_path):
+    from packages.agent_sdk.tools.builtin.command_tools import run_command_impl
+    with pytest.raises(PermissionError, match="metacharacter"):
+        run_command_impl("echo hello | cat", str(tmp_path))
+
+
+def test_run_command_rejects_command_substitution(tmp_path):
+    from packages.agent_sdk.tools.builtin.command_tools import run_command_impl
+    with pytest.raises(PermissionError, match="metacharacter"):
+        run_command_impl("echo $(whoami)", str(tmp_path))

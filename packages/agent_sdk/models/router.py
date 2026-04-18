@@ -17,12 +17,10 @@ TASK_ROUTE_TABLE: dict[str, tuple[str, str]] = {
 
 DEFAULT_ROUTE: tuple[str, str] = ("openai", "gpt-5.4")
 
-_ESCALATION: list[tuple[str, str]] = [
-    ("openai", "gpt-5.4-mini"),
-    ("openai", "gpt-5.4"),
-    ("anthropic", "claude-sonnet-4-6"),
-    ("anthropic", "claude-opus-4-6"),
-]
+_ESCALATION: dict[str, list[str]] = {
+    "openai": ["gpt-5.4-mini", "gpt-5.4"],
+    "anthropic": ["claude-sonnet-4-6", "claude-opus-4-6"],
+}
 
 
 def _parse_override(value: str) -> tuple[str, str] | None:
@@ -34,21 +32,6 @@ def _parse_override(value: str) -> tuple[str, str] | None:
             if provider and model:
                 return provider, model
     return None
-
-
-def _provider_for_model(current_model: str) -> str:
-    for provider, model in _ESCALATION:
-        if model == current_model:
-            return provider
-
-    for provider, model in TASK_ROUTE_TABLE.values():
-        if model == current_model:
-            return provider
-
-    if DEFAULT_ROUTE[1] == current_model:
-        return DEFAULT_ROUTE[0]
-
-    return DEFAULT_ROUTE[0]
 
 
 class ModelRouter:
@@ -65,15 +48,12 @@ class ModelRouter:
         return TASK_ROUTE_TABLE.get(task_type, DEFAULT_ROUTE)
 
     @staticmethod
-    def escalate(current_model: str) -> tuple[str, str]:
-        for index, route in enumerate(_ESCALATION):
-            provider, model = route
-            if model != current_model:
-                continue
-            if index < len(_ESCALATION) - 1:
-                next_provider, next_model = _ESCALATION[index + 1]
-                if next_provider == provider:
-                    return next_provider, next_model
-            return provider, model
-
-        return _provider_for_model(current_model), current_model
+    def escalate(provider: str, current_model: str) -> tuple[str, str]:
+        """Escalate to the next stronger model within the same provider."""
+        ladder = _ESCALATION.get(provider, [])
+        if current_model not in ladder:
+            return provider, current_model
+        idx = ladder.index(current_model)
+        if idx < len(ladder) - 1:
+            return provider, ladder[idx + 1]
+        return provider, current_model

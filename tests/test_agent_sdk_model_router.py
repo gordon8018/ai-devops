@@ -37,7 +37,7 @@ def test_unknown_type_falls_back_to_default_route():
 def test_escalate_returns_stronger_model():
     from packages.agent_sdk.models.router import ModelRouter
 
-    provider, model = ModelRouter.escalate("gpt-5.4-mini")
+    provider, model = ModelRouter.escalate("openai", "gpt-5.4-mini")
 
     assert provider == "openai"
     assert model == "gpt-5.4"
@@ -46,10 +46,19 @@ def test_escalate_returns_stronger_model():
 def test_escalate_at_max_returns_same_model():
     from packages.agent_sdk.models.router import ModelRouter
 
-    provider, model = ModelRouter.escalate("gpt-5.4")
+    provider, model = ModelRouter.escalate("openai", "gpt-5.4")
 
     assert provider == "openai"
     assert model == "gpt-5.4"
+
+
+def test_escalate_anthropic_works():
+    from packages.agent_sdk.models.router import ModelRouter
+
+    provider, model = ModelRouter.escalate("anthropic", "claude-sonnet-4-6")
+
+    assert provider == "anthropic"
+    assert model == "claude-opus-4-6"
 
 
 def test_all_task_type_enum_values_have_routes():
