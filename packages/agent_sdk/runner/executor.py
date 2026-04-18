@@ -13,6 +13,7 @@ from agents.exceptions import MaxTurnsExceeded
 from packages.agent_sdk.models.router import ModelRouter
 from packages.agent_sdk.runner.agent_factory import AgentFactory
 from packages.agent_sdk.runner.context_bridge import ContextBridge
+from packages.agent_sdk.tracing.usage_collector import TokenUsageCollector
 from packages.shared.domain.models import AgentRun, AgentRunStatus, ReviewFinding
 
 if TYPE_CHECKING:
@@ -58,6 +59,12 @@ class AgentExecutor:
         work_item_id: str, plan_id: str, workspace_path: str,
     ) -> AgentRunResult:
         agent = self._factory.build(subtask, context_pack)
+        run_context = ContextBridge.to_run_context(
+            work_item_id=work_item_id,
+            plan_id=plan_id,
+            workspace_path=workspace_path,
+            event_bus=self._event_bus,
+        )
         task_type_value = subtask.task_type.value if hasattr(subtask.task_type, "value") else str(subtask.task_type)
         provider, current_model = ModelRouter.resolve(task_type_value)
 
@@ -73,20 +80,12 @@ class AgentExecutor:
                     result = await Runner.run(
                         starting_agent=agent,
                         input=subtask.prompt or subtask.description,
+                        context=run_context,
                         max_turns=MAX_TURNS,
                     )
                     duration = time.monotonic() - start_time
 
-                    usage = {}
-                    if hasattr(result, "usage") and result.usage is not None:
-                        usage = {
-                            "input_tokens": getattr(result.usage, "input_tokens", 0),
-                            "output_tokens": getattr(result.usage, "output_tokens", 0),
-                            "total_tokens": getattr(result.usage, "total_tokens", 0),
-                            "model": current_model,
-                            "duration_seconds": round(duration, 2),
-                            "attempts": attempt + 1,
-                        }
+                    usage = TokenUsageCollector.extract(result, model=current_model, duration=duration)
 
                     agent_run = AgentRun(
                         run_id=f"{subtask.id}-run-{attempt + 1}",

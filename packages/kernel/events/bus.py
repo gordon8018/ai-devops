@@ -6,6 +6,14 @@ import time
 from typing import Any, Callable
 
 
+AGENT_TRACE_EVENTS: frozenset[str] = frozenset({
+    "agent_run.started", "agent_run.completed", "agent_run.failed",
+    "agent_run.max_turns", "agent_run.llm_call", "agent_run.llm_response",
+    "agent_run.tool_called", "agent_run.tool_result",
+    "agent_run.guardrail_triggered", "agent_run.handoff",
+})
+
+
 @dataclass(slots=True, frozen=True)
 class EventEnvelope:
     event_type: str

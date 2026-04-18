@@ -114,6 +114,19 @@ class AgentLauncher:
         )
 
 
+class SdkAgentLauncher:
+    """Agent launcher that delegates to AgentExecutor (SDK-based)."""
+
+    def __init__(self, executor):
+        self._executor = executor
+
+    async def launch_async(self, subtask, context_pack, work_item_id, plan_id, workspace_path):
+        return await self._executor.execute(
+            subtask=subtask, context_pack=context_pack,
+            work_item_id=work_item_id, plan_id=plan_id, workspace_path=workspace_path,
+        )
+
+
 class RunStateRecorder:
     def __init__(self, *, now_ms_fn: Callable[[], int] | None = None) -> None:
         self._now_ms = now_ms_fn or (lambda: int(time.time() * 1000))

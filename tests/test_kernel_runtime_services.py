@@ -112,3 +112,31 @@ def test_run_state_recorder_builds_running_task_record() -> None:
     assert record["taskSpecFile"].endswith("task-spec.json")
     assert record["scopeManifestFile"].endswith("scope-manifest.json")
     assert record["startedAt"] == 1710000000000
+
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock
+
+
+@pytest.mark.asyncio
+async def test_sdk_agent_launcher_delegates_to_executor():
+    from packages.kernel.runtime.services import SdkAgentLauncher
+    from packages.shared.domain.models import AgentRun, AgentRunStatus
+    from packages.agent_sdk.runner.executor import AgentRunResult
+
+    fake_result = AgentRunResult(
+        agent_run=AgentRun(
+            run_id="r1", work_item_id="wi-001", context_pack_id="cp-001",
+            agent="test", model="gpt-5.4", status=AgentRunStatus.COMPLETED,
+        ),
+    )
+    mock_executor = MagicMock()
+    mock_executor.execute = AsyncMock(return_value=fake_result)
+    launcher = SdkAgentLauncher(executor=mock_executor)
+
+    result = await launcher.launch_async(
+        subtask=MagicMock(), context_pack=MagicMock(),
+        work_item_id="wi-001", plan_id="plan-001", workspace_path="/tmp/ws",
+    )
+    assert result.agent_run.status == AgentRunStatus.COMPLETED
+    mock_executor.execute.assert_awaited_once()

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from agents import Agent
 
 from packages.agent_sdk.models.router import ModelRouter
 from packages.agent_sdk.runner.context_bridge import ContextBridge
+from packages.agent_sdk.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
     from orchestrator.bin.plan_schema import Subtask
@@ -22,10 +23,13 @@ class AgentFactory:
         task_type_value = task_type.value if hasattr(task_type, "value") else str(task_type)
         _provider, model_name = ModelRouter.resolve(task_type_value)
         instructions = ContextBridge.to_instructions(subtask, context_pack)
+        tools = ToolRegistry.resolve(task_type_value)
+
         return Agent(
             name=f"{subtask.id}-{task_type_value}",
             instructions=instructions,
             model=model_name,
+            tools=tools,
         )
 
     def build_with_escalated_model(
@@ -35,8 +39,11 @@ class AgentFactory:
         _provider, escalated_model = ModelRouter.escalate(current_provider, current_model)
         instructions = ContextBridge.to_instructions(subtask, context_pack)
         task_type_value = subtask.task_type.value if hasattr(subtask.task_type, "value") else str(subtask.task_type)
+        tools = ToolRegistry.resolve(task_type_value)
+
         return Agent(
             name=f"{subtask.id}-{task_type_value}-escalated",
             instructions=instructions,
             model=escalated_model,
+            tools=tools,
         )

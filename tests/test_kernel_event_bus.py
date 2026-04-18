@@ -101,3 +101,14 @@ def test_kernel_bus_bridge_does_not_recurse_when_subscriber_republishes_once() -
         "work_item.created",
         "work_item.republished",
     ]
+
+
+def test_agent_trace_events_constant_has_all_types():
+    from packages.kernel.events.bus import AGENT_TRACE_EVENTS
+    expected = {
+        "agent_run.started", "agent_run.completed", "agent_run.failed",
+        "agent_run.max_turns", "agent_run.llm_call", "agent_run.llm_response",
+        "agent_run.tool_called", "agent_run.tool_result",
+        "agent_run.guardrail_triggered", "agent_run.handoff",
+    }
+    assert expected == AGENT_TRACE_EVENTS
