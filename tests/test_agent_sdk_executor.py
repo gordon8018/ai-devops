@@ -20,7 +20,7 @@ def _make_subtask(**overrides):
 
 def _make_context_pack(**overrides):
     from packages.shared.domain.models import ContextPack
-    defaults = dict(pack_id="cp-001", work_item_id="wi-001")
+    defaults = dict(pack_id="cp-001", work_item_id="wi-001", constraints={"allowedPaths": ["src/"]})
     defaults.update(overrides)
     return ContextPack(**defaults)
 

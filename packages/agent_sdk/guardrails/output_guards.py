@@ -65,13 +65,19 @@ class ForbiddenPathGuard:
         return ForbiddenPathResult(tripwire_triggered=False)
 
 
+@dataclass(frozen=True)
+class OutputFormatResult:
+    tripwire_triggered: bool = False
+    issues: tuple[str, ...] = ()
+
+
 class OutputFormatGuard:
     """Validate structured output has required fields. Warns but does not abort."""
 
     @staticmethod
-    def check(output: Any, required_fields: list[str]) -> CodeSafetyResult:
+    def check(output: Any, required_fields: list[str]) -> OutputFormatResult:
         if not required_fields:
-            return CodeSafetyResult()
+            return OutputFormatResult()
         missing: list[str] = []
         if isinstance(output, dict):
             for f in required_fields:
@@ -83,4 +89,4 @@ class OutputFormatGuard:
                     missing.append(f"Missing required attribute: {f}")
         else:
             missing.append(f"Output is not structured (type: {type(output).__name__})")
-        return CodeSafetyResult(risks=tuple(missing))
+        return OutputFormatResult(issues=tuple(missing))

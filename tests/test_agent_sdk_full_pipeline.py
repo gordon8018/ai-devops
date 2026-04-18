@@ -70,7 +70,7 @@ async def test_full_pipeline_all_phases():
     assert SecretLeakGuard.check(agent_output).tripwire_triggered is False
     assert len(CodeSafetyGuard.check(agent_output).risks) == 0
     assert ForbiddenPathGuard.check(["src/hello.py"], ["secrets/"]).tripwire_triggered is False
-    assert len(OutputFormatGuard.check({"result": "ok"}, ["result"]).risks) == 0
+    assert len(OutputFormatGuard.check({"result": "ok"}, ["result"]).issues) == 0
 
     # Phase 1: Execute via SdkAgentLauncher -> AgentExecutor
     bus = InMemoryEventBus()

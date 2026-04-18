@@ -10,6 +10,7 @@ from typing import Any, TYPE_CHECKING
 from agents import Agent, Runner
 from agents.exceptions import MaxTurnsExceeded
 
+from packages.agent_sdk.guardrails.input_guards import BoundaryGuard, PromptInjectionGuard
 from packages.agent_sdk.models.router import ModelRouter
 from packages.agent_sdk.runner.agent_factory import AgentFactory
 from packages.agent_sdk.runner.context_bridge import ContextBridge
@@ -25,16 +26,6 @@ BACKOFF_SECONDS = [30, 90, 270]
 MAX_TURNS = 50
 MAX_CONCURRENT_SUBTASKS = 8
 
-_semaphore: asyncio.Semaphore | None = None
-
-
-def _get_semaphore() -> asyncio.Semaphore:
-    global _semaphore
-    if _semaphore is None:
-        _semaphore = asyncio.Semaphore(MAX_CONCURRENT_SUBTASKS)
-    return _semaphore
-
-
 @dataclass
 class AgentRunResult:
     """Mutable wrapper around immutable AgentRun + guardrail findings."""
@@ -46,9 +37,10 @@ class AgentRunResult:
 class AgentExecutor:
     """Executes agent runs with retry, model escalation, and event publishing."""
 
-    def __init__(self, event_bus: Any = None):
+    def __init__(self, event_bus: Any = None, max_concurrent: int = MAX_CONCURRENT_SUBTASKS):
         self._factory = AgentFactory()
         self._event_bus = event_bus
+        self._semaphore = asyncio.Semaphore(max_concurrent)
 
     def _publish(self, event_type: str, payload: dict[str, Any]) -> None:
         if self._event_bus is not None:
@@ -68,7 +60,54 @@ class AgentExecutor:
         task_type_value = subtask.task_type.value if hasattr(subtask.task_type, "value") else str(subtask.task_type)
         provider, current_model = ModelRouter.resolve(task_type_value)
 
-        async with _get_semaphore():
+        # Phase 3: Run input guardrails before execution
+        review_findings: list[ReviewFinding] = []
+        boundary_result = BoundaryGuard.check(
+            constraints=context_pack.constraints,
+            definition_of_done=subtask.definition_of_done,
+        )
+        if boundary_result.tripwire_triggered:
+            agent_run = AgentRun(
+                run_id=f"{subtask.id}-run-guardrail-blocked",
+                work_item_id=work_item_id,
+                context_pack_id=context_pack.pack_id,
+                agent=agent.name, model=current_model,
+                status=AgentRunStatus.FAILED,
+            )
+            review_findings.append(ReviewFinding(
+                finding_id=f"{subtask.id}-boundary",
+                category="boundary", severity="critical",
+                message=boundary_result.message,
+                source_guardrail="BoundaryGuard",
+            ))
+            self._publish("agent_run.guardrail_triggered", {
+                "subtask_id": subtask.id, "guardrail": "BoundaryGuard",
+                "message": boundary_result.message,
+            })
+            return AgentRunResult(agent_run=agent_run, review_findings=review_findings)
+
+        injection_result = PromptInjectionGuard.check(subtask.prompt or subtask.description)
+        if injection_result.tripwire_triggered:
+            agent_run = AgentRun(
+                run_id=f"{subtask.id}-run-injection-blocked",
+                work_item_id=work_item_id,
+                context_pack_id=context_pack.pack_id,
+                agent=agent.name, model=current_model,
+                status=AgentRunStatus.FAILED,
+            )
+            review_findings.append(ReviewFinding(
+                finding_id=f"{subtask.id}-injection",
+                category="security", severity="critical",
+                message=injection_result.message,
+                source_guardrail="PromptInjectionGuard",
+            ))
+            self._publish("agent_run.guardrail_triggered", {
+                "subtask_id": subtask.id, "guardrail": "PromptInjectionGuard",
+                "message": injection_result.message,
+            })
+            return AgentRunResult(agent_run=agent_run, review_findings=review_findings)
+
+        async with self._semaphore:
             for attempt in range(MAX_ATTEMPTS):
                 try:
                     self._publish("agent_run.started", {

@@ -75,7 +75,7 @@ async def test_pipeline_anthropic_routing():
         worktree_strategy="shared", task_type=TaskType.CODE_REVIEW,
         definition_of_done=("Review complete",),
     )
-    context_pack = ContextPack(pack_id="int-cp2", work_item_id="int-wi2")
+    context_pack = ContextPack(pack_id="int-cp2", work_item_id="int-wi2", constraints={"allowedPaths": ["src/"]})
     executor = AgentExecutor(event_bus=MagicMock())
 
     with patch("packages.agent_sdk.runner.executor.Runner") as MockRunner:
@@ -125,7 +125,7 @@ async def test_pipeline_run_context_passed_to_runner():
         worktree_strategy="shared", task_type=TaskType.CODE_GENERATION,
         definition_of_done=("Done",),
     )
-    context_pack = ContextPack(pack_id="cp4", work_item_id="wi4")
+    context_pack = ContextPack(pack_id="cp4", work_item_id="wi4", constraints={"allowedPaths": ["src/"]})
     executor = AgentExecutor(event_bus=MagicMock())
 
     with patch("packages.agent_sdk.runner.executor.Runner") as MockRunner:
@@ -135,5 +135,6 @@ async def test_pipeline_run_context_passed_to_runner():
             work_item_id="wi4", plan_id="plan4", workspace_path="/tmp/test",
         )
 
-    call_kwargs = MockRunner.run.call_args
-    assert call_kwargs.kwargs.get("context") is not None or (len(call_kwargs.args) > 2 if call_kwargs.args else False)
+    assert MockRunner.run.call_count == 1
+    call_kwargs = MockRunner.run.call_args.kwargs
+    assert "context" in call_kwargs and call_kwargs["context"] is not None

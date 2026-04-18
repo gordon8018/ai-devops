@@ -38,6 +38,7 @@ class TokenUsageCollector:
             "total_output_tokens": sum(r.get("output_tokens", 0) for r in runs),
             "total_tokens": sum(r.get("total_tokens", 0) for r in runs),
             "total_duration_seconds": round(sum(r.get("duration_seconds", 0) for r in runs), 2),
+            "total_cost_estimate": round(sum(r.get("cost_estimate", 0) for r in runs), 6),
             "run_count": len(runs),
             "models_used": list({r.get("model", "unknown") for r in runs}),
         }
