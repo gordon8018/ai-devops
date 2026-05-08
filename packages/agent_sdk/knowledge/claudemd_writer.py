@@ -14,13 +14,28 @@ from packages.agent_sdk.knowledge.knowledge_extractor import ExtractedKnowledge
 MAX_CLAUDEMD_BYTES = 50 * 1024  # 50KB cap before archiving
 SECTION_HEADER = "## Patterns (auto-accumulated by AI-DevOps)\n"
 
+_BLOCKED_ROOTS = frozenset({
+    "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64",
+    "/var/log", "/root", "/proc", "/sys", "/dev",
+})
+
+
+def _safe_claudemd_path(workspace_path: str) -> str:
+    """Resolve to absolute path and reject obvious system directories."""
+    resolved_ws = Path(workspace_path).resolve()
+    for blocked in _BLOCKED_ROOTS:
+        if str(resolved_ws) == blocked or str(resolved_ws).startswith(blocked + "/"):
+            raise ValueError(
+                f"workspace_path resolves to a system directory: {workspace_path!r} → {resolved_ws}"
+            )
+    return str(resolved_ws / "CLAUDE.md")
+
 _FILE_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 def _get_lock(path: str) -> asyncio.Lock:
-    if path not in _FILE_LOCKS:
-        _FILE_LOCKS[path] = asyncio.Lock()
-    return _FILE_LOCKS[path]
+    # setdefault is atomic under CPython's GIL, avoiding TOCTOU between concurrent coroutines
+    return _FILE_LOCKS.setdefault(path, asyncio.Lock())
 
 
 def _content_hash(text: str) -> str:
@@ -50,10 +65,20 @@ def _atomic_write(path: str, content: str) -> None:
 
 
 def _rotate(path: str, existing_content: str) -> None:
+    # Write archive atomically first so content is never lost on crash.
+    # If we crash after archive write but before main reset, main retains old content
+    # which is benign (dedup by hash prevents re-appending the same entries).
     archive_path = path + ".archive"
-    with open(archive_path, "a", encoding="utf-8") as af:
-        af.write(f"\n\n# Archived {datetime.now(timezone.utc).isoformat()}\n")
-        af.write(existing_content)
+    try:
+        existing_archive = Path(archive_path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        existing_archive = ""
+    new_archive = (
+        existing_archive
+        + f"\n\n# Archived {datetime.now(timezone.utc).isoformat()}\n"
+        + existing_content
+    )
+    _atomic_write(archive_path, new_archive)
     _atomic_write(path, f"# Project Knowledge\n\n{SECTION_HEADER}\n")
 
 
@@ -81,7 +106,7 @@ class ClaudeMDWriter:
         ts = timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         entry = ClaudeMDWriter._format_entry(knowledge, work_item_id, subtask_id, ts)
         entry_hash = _content_hash(entry)
-        claudemd_path = str(Path(workspace_path) / "CLAUDE.md")
+        claudemd_path = _safe_claudemd_path(workspace_path)
 
         async with _get_lock(claudemd_path):
             existing = await asyncio.to_thread(_read_file_safe, claudemd_path)

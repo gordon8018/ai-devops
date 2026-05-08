@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
 import tempfile
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 MAX_IMAGE_BYTES = 256 * 1024  # 256KB compression cap
 
@@ -65,7 +68,11 @@ class ScreenshotCapture:
                 new_size = (int(img.width * scale), int(img.height * scale))
                 img.resize(new_size, Image.LANCZOS).save(path, optimize=True)
         except ImportError:
-            pass
+            logger.warning(
+                "Pillow not installed; screenshot at %s is %d bytes (exceeds %d byte cap). "
+                "Install Pillow to enable compression: pip install Pillow",
+                path, Path(path).stat().st_size, MAX_IMAGE_BYTES,
+            )
 
     @staticmethod
     async def _capture_playwright(url: str, output_path: str) -> str | None:
@@ -124,5 +131,10 @@ class ScreenshotCapture:
                 await asyncio.wait_for(proc.wait(), timeout=5)
             except asyncio.TimeoutError:
                 proc.kill()
+            # Remove any partial/empty file so the cascade doesn't mistake it for a valid result
+            try:
+                Path(output_path).unlink(missing_ok=True)
+            except OSError:
+                pass
             return None
         return output_path if Path(output_path).exists() else None

@@ -73,12 +73,18 @@ class AgentExecutor:
                 "subtask_id": subtask_id, "model": model, "work_item_id": work_item_id,
             })
             start_time = time.monotonic()
-            result = await Runner.run(
-                starting_agent=agent,
-                input=prompt,
-                context=run_context,
-                max_turns=MAX_TURNS,
-            )
+            try:
+                result = await Runner.run(
+                    starting_agent=agent,
+                    input=prompt,
+                    context=run_context,
+                    max_turns=MAX_TURNS,
+                )
+            except Exception:
+                self._publish("agent_run.failed", {
+                    "subtask_id": subtask_id, "model": model, "work_item_id": work_item_id,
+                })
+                raise
             duration = time.monotonic() - start_time
             usage = TokenUsageCollector.extract(result, model=model, duration=duration)
             output_text = str(result.final_output) if result.final_output else ""
@@ -149,8 +155,9 @@ class AgentExecutor:
             })
             return AgentRunResult(agent_run=agent_run, review_findings=review_findings)
 
-        async with self._semaphore:
-            for attempt in range(MAX_ATTEMPTS):
+        # Semaphore acquired per-attempt so backoff sleeps don't hold a concurrency slot.
+        for attempt in range(MAX_ATTEMPTS):
+            async with self._semaphore:
                 try:
                     self._publish("agent_run.started", {
                         "subtask_id": subtask.id, "attempt": attempt + 1,
@@ -188,14 +195,13 @@ class AgentExecutor:
                     agent = self._factory.build_with_escalated_model(
                         subtask, context_pack, provider, current_model,
                     )
+                    continue  # re-acquire semaphore for next attempt, no sleep
 
                 except Exception as e:
                     self._publish("agent_run.failed", {
                         "subtask_id": subtask.id, "attempt": attempt + 1, "error": str(e),
                     })
-                    if attempt < MAX_ATTEMPTS - 1:
-                        await asyncio.sleep(BACKOFF_SECONDS[attempt])
-                    else:
+                    if attempt >= MAX_ATTEMPTS - 1:
                         agent_run = AgentRun(
                             run_id=f"{subtask.id}-run-failed",
                             work_item_id=work_item_id,
@@ -204,9 +210,13 @@ class AgentExecutor:
                             status=AgentRunStatus.FAILED,
                         )
                         return AgentRunResult(agent_run=agent_run)
+                    # else fall through — sleep outside semaphore below
+
+            # Backoff outside semaphore so the slot is free during the wait
+            await asyncio.sleep(BACKOFF_SECONDS[attempt])
 
         agent_run = AgentRun(
-            run_id=f"{subtask.id}-run-unreachable",
+            run_id=f"{subtask.id}-run-exhausted",
             work_item_id=work_item_id,
             context_pack_id=context_pack.pack_id,
             agent=agent.name, model=current_model,
@@ -230,23 +240,19 @@ class AgentExecutor:
         On success, optionally triggers background CLAUDE.md knowledge evolution.
         """
         task_type_value = subtask.task_type.value if hasattr(subtask.task_type, "value") else str(subtask.task_type)
+        _, model = ModelRouter.resolve(task_type_value)
 
-        if task_type_value == "ui_verification":
-            return await self._execute_ui_verification(subtask, context_pack, work_item_id, workspace_path)
-
-        # Input guardrails (same as execute())
+        # Input guardrails — applied to ALL task types including ui_verification
         boundary_result = BoundaryGuard.check(
             constraints=context_pack.constraints,
             definition_of_done=subtask.definition_of_done,
         )
         if boundary_result.tripwire_triggered:
-            agent = self._factory.build(subtask, context_pack)
-            _, model = ModelRouter.resolve(task_type_value)
             agent_run = AgentRun(
                 run_id=f"{subtask.id}-review-guardrail-blocked",
                 work_item_id=work_item_id,
                 context_pack_id=context_pack.pack_id,
-                agent=agent.name, model=model,
+                agent=subtask.agent, model=model,
                 status=AgentRunStatus.FAILED,
             )
             self._publish("agent_run.guardrail_triggered", {
@@ -265,13 +271,11 @@ class AgentExecutor:
 
         injection_result = PromptInjectionGuard.check(subtask.prompt or subtask.description)
         if injection_result.tripwire_triggered:
-            agent = self._factory.build(subtask, context_pack)
-            _, model = ModelRouter.resolve(task_type_value)
             agent_run = AgentRun(
                 run_id=f"{subtask.id}-review-injection-blocked",
                 work_item_id=work_item_id,
                 context_pack_id=context_pack.pack_id,
-                agent=agent.name, model=model,
+                agent=subtask.agent, model=model,
                 status=AgentRunStatus.FAILED,
             )
             self._publish("agent_run.guardrail_triggered", {
@@ -287,6 +291,9 @@ class AgentExecutor:
                     source_guardrail="PromptInjectionGuard",
                 )],
             )
+
+        if task_type_value == "ui_verification":
+            return await self._execute_ui_verification(subtask, context_pack, work_item_id, workspace_path)
 
         # Lazy import to avoid circular dependency (executor ← orchestrator ← executor)
         from packages.agent_sdk.review.adversarial_orchestrator import AdversarialReviewOrchestrator
@@ -341,7 +348,8 @@ class AgentExecutor:
         workspace_path: str,
     ) -> AgentRunResult:
         from packages.agent_sdk.ui_testing.ui_test_orchestrator import UITestOrchestrator
-        orchestrator = UITestOrchestrator(event_bus=self._event_bus)
+        _, ui_model = ModelRouter.resolve("ui_verification")
+        orchestrator = UITestOrchestrator(event_bus=self._event_bus, verifier_model=ui_model)
         ui_result: UITestResult = await orchestrator.run(subtask, workspace_path)
         status = AgentRunStatus.COMPLETED if ui_result.passed else AgentRunStatus.FAILED
         agent_run = AgentRun(
@@ -349,7 +357,7 @@ class AgentExecutor:
             work_item_id=work_item_id,
             context_pack_id=context_pack.pack_id,
             agent="UITestOrchestrator",
-            model="claude-opus-4-6",
+            model=ui_model,
             status=status,
         )
         return AgentRunResult(agent_run=agent_run, review_findings=list(ui_result.findings))

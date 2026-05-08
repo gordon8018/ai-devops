@@ -6,11 +6,13 @@ from agents import function_tool
 
 
 @function_tool
-async def capture_screenshot(url: str, output_path: str = "/tmp/screenshot.png") -> str:
+async def capture_screenshot(url: str, output_path: str = "") -> str:
     """Capture a screenshot of the given URL. Returns path to saved PNG."""
     from packages.agent_sdk.ui_testing.screenshot_capture import ScreenshotCapture
+    # Pass None when no explicit path given so each call gets a unique temp file
+    dest = output_path if output_path else None
     try:
-        path = await ScreenshotCapture.capture(url, output_path)
+        path = await ScreenshotCapture.capture(url, dest)
         return f"Screenshot saved to: {path}"
     except Exception as e:
         return f"Screenshot failed: {e}"

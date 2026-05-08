@@ -102,5 +102,5 @@ class UITestOrchestrator:
             )
         finally:
             if server_proc is not None:
-                ServerManager.stop(server_proc)
+                await ServerManager.stop(server_proc)
                 self._publish("ui_test.server_stopped", {"subtask_id": subtask.id})

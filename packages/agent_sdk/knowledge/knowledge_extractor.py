@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 
 from agents import Agent, Runner
+
+logger = logging.getLogger(__name__)
 
 EXTRACTION_SYSTEM_PROMPT = """\
 You are a knowledge distillation assistant. Given an agent's implementation output, extract only:
@@ -56,7 +59,7 @@ class KnowledgeExtractor:
         )
 
         try:
-            result = await Runner.run(starting_agent=agent, input=prompt, max_turns=3)
+            result = await Runner.run(starting_agent=agent, input=prompt, max_turns=1)
             raw = str(result.final_output or "").strip()
 
             # Strip markdown code fences if present
@@ -74,5 +77,6 @@ class KnowledgeExtractor:
                 gotchas=tuple(str(x)[:150] for x in data.get("gotchas", [])[:5]),
                 decisions=tuple(str(x)[:150] for x in data.get("decisions", [])[:5]),
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("KnowledgeExtractor failed for subtask %r: %s", subtask_title, exc)
             return ExtractedKnowledge(patterns=(), gotchas=(), decisions=())

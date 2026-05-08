@@ -42,20 +42,25 @@ class ReviewScorer:
 
     @staticmethod
     def parse(raw_output: str, subtask_id: str) -> ReviewScore:
-        tail_lines = [l for l in raw_output.splitlines() if l.strip()][-10:]
+        tail_lines = [line for line in raw_output.splitlines() if line.strip()][-10:]
         tail = "\n".join(tail_lines)
 
         sentinel_pass = bool(_SENTINEL_PASS.search(tail))
         sentinel_fail = bool(_SENTINEL_FAIL.search(tail))
         sentinel_used = sentinel_pass or sentinel_fail
 
-        # Always extract numeric score regardless of sentinel presence
+        # Always extract numeric score regardless of sentinel presence.
+        # Only pattern index 3 (\d/10) and index 4 (评分: \d, ambiguous) trigger x10 normalization.
+        # Patterns 0-2 all match explicit /100 format and need no scaling.
         score: int | None = None
-        for pattern in _SCORE_PATTERNS:
+        for idx, pattern in enumerate(_SCORE_PATTERNS):
             m = pattern.search(raw_output)
             if m:
                 raw_val = int(m.group(1))
-                score = raw_val * 10 if raw_val <= 10 else raw_val
+                if idx == 3 or (idx == 4 and raw_val <= 10):
+                    score = raw_val * 10
+                else:
+                    score = raw_val
                 score = max(0, min(100, score))
                 break
 

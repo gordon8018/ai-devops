@@ -10,6 +10,7 @@ from typing import Any, TYPE_CHECKING
 
 from agents import Agent, Runner
 
+from packages.agent_sdk.guardrails.input_guards import PromptInjectionGuard
 from packages.agent_sdk.models.router import ModelRouter
 from packages.agent_sdk.review.review_scorer import ReviewScore, ReviewScorer
 from packages.agent_sdk.review.review_prompt import REVIEWER_SYSTEM_PROMPT, build_review_prompt
@@ -117,6 +118,7 @@ class AdversarialReviewOrchestrator:
                 subtask=subtask,
                 context_pack=context_pack,
                 work_item_id=work_item_id,
+                plan_id=plan_id,
                 workspace_path=workspace_path,
                 prior_review=prior_review_text,
                 round_num=review_round,
@@ -124,6 +126,13 @@ class AdversarialReviewOrchestrator:
             )
 
             if impl_status == AgentRunStatus.FAILED:
+                all_findings.append(ReviewFinding(
+                    finding_id=f"{subtask.id}-impl-failed-{review_round}",
+                    category="implementation",
+                    severity="high",
+                    message=f"Implementer agent failed at round {review_round}",
+                    source_guardrail="AdversarialReview",
+                ))
                 break
 
             # — Reviewer run (dedicated semaphore, not workspace semaphore) —
@@ -180,8 +189,8 @@ class AdversarialReviewOrchestrator:
                     round_results,
                 )
 
-            # Stall detection (Fix H6)
-            if len(round_results) >= 2:
+            # Stall detection — needs at least one previous round to compare
+            if review_round >= 1:
                 prev_score = round_results[-2].review_score.score
                 if review_score.score <= prev_score:
                     stall_count += 1
@@ -199,7 +208,17 @@ class AdversarialReviewOrchestrator:
                 else:
                     stall_count = 0
 
-            prior_review_text = review_score.raw_output[:2000]
+            # Scan reviewer output for injection patterns before feeding back to implementer
+            raw_review = review_score.raw_output[:2000]
+            injection_check = PromptInjectionGuard.check(raw_review)
+            if injection_check.tripwire_triggered:
+                logger.warning(
+                    "Injection pattern detected in reviewer output for subtask %s round %d — redacting",
+                    subtask.id, review_round,
+                )
+                prior_review_text = "[Review feedback redacted: injection pattern detected]"
+            else:
+                prior_review_text = raw_review
 
         self._publish("adversarial_review.exhausted", {
             "subtask_id": subtask.id,
@@ -214,7 +233,7 @@ class AdversarialReviewOrchestrator:
             status=AgentRunStatus.FAILED,
         )
         return (
-            AgentRunResult(agent_run=agent_run, review_findings=all_findings),
+            AgentRunResult(agent_run=agent_run, review_findings=all_findings, token_usage=_merge_usage(round_results)),
             round_results,
         )
 
@@ -223,6 +242,7 @@ class AdversarialReviewOrchestrator:
         subtask: Subtask,
         context_pack: ContextPack,
         work_item_id: str,
+        plan_id: str,
         workspace_path: str,
         prior_review: str,
         round_num: int,
@@ -231,7 +251,7 @@ class AdversarialReviewOrchestrator:
         agent = self._factory.build(subtask, context_pack)
         run_context = ContextBridge.to_run_context(
             work_item_id=work_item_id,
-            plan_id="",
+            plan_id=plan_id,
             workspace_path=workspace_path,
             event_bus=self._event_bus,
         )
@@ -298,7 +318,7 @@ class AdversarialReviewOrchestrator:
                 return output_text, usage
             except Exception as e:
                 logger.warning("Reviewer failed at round %d for subtask %s: %s", round_num, subtask.id, e)
-                return f"ADVERSARIAL_RESULT: FAIL\n[HIGH] Reviewer agent failed: {e}", {}
+                return "ADVERSARIAL_RESULT: FAIL\n[HIGH] Reviewer agent failed: internal error (see logs)", {}
 
 
 def _merge_usage(round_results: list[AdversarialRoundResult]) -> dict[str, Any]:

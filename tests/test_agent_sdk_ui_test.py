@@ -355,4 +355,4 @@ async def orch_run_raw(subtask, workspace_path):
         await ScreenshotCapture.capture_and_compress(server_proc.url)
     finally:
         if server_proc is not None:
-            ServerManager.stop(server_proc)
+            await ServerManager.stop(server_proc)
