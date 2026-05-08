@@ -6,6 +6,7 @@ from agents import function_tool
 
 from packages.agent_sdk.tools.builtin.file_tools import read_file_impl, write_file_impl, list_directory_impl
 from packages.agent_sdk.tools.builtin.command_tools import run_command_impl
+from packages.agent_sdk.ui_testing.tools.ui_tools import capture_screenshot, detect_dev_server
 
 
 @function_tool
@@ -83,6 +84,7 @@ _TASK_TOOLS: dict[str, list] = {
     "documentation":   [],
     "planning":        [],
     "incident_analysis": [git_log],
+    "ui_verification": [capture_screenshot, detect_dev_server],
 }
 
 

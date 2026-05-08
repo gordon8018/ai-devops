@@ -9,6 +9,20 @@ _EVENT_MAP: dict[str, str] = {
     "llm.generation.start": "agent_run.llm_call", "llm.generation.end": "agent_run.llm_response",
     "tool.call": "agent_run.tool_called", "tool.result": "agent_run.tool_result",
     "guardrail.triggered": "agent_run.guardrail_triggered", "handoff": "agent_run.handoff",
+    # Adversarial review events
+    "adversarial_review.round_completed": "agent_run.review_round",
+    "adversarial_review.passed":          "agent_run.review_passed",
+    "adversarial_review.exhausted":       "agent_run.review_exhausted",
+    "adversarial_review.stalled":         "agent_run.review_stalled",
+    "adversarial_review.impl_failed":     "agent_run.review_impl_failed",
+    # Knowledge evolver events
+    "knowledge.evolved":                  "agent_run.knowledge_evolved",
+    # UI test events
+    "ui_test.server_detected":            "agent_run.ui_server_detected",
+    "ui_test.server_ready":               "agent_run.ui_server_ready",
+    "ui_test.screenshot_captured":        "agent_run.ui_screenshot",
+    "ui_test.completed":                  "agent_run.ui_test_completed",
+    "ui_test.server_stopped":             "agent_run.ui_server_stopped",
 }
 
 _SENSITIVE_FIELDS = frozenset({"input", "output", "prompt", "response", "content", "arguments"})
