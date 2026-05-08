@@ -15,7 +15,7 @@ from packages.agent_sdk.models.router import ModelRouter
 from packages.agent_sdk.runner.agent_factory import AgentFactory
 from packages.agent_sdk.runner.context_bridge import ContextBridge
 from packages.agent_sdk.tracing.usage_collector import TokenUsageCollector
-from packages.shared.domain.models import AgentRun, AgentRunStatus, ReviewFinding
+from packages.shared.domain.models import AgentRun, AgentRunResult, AgentRunStatus, ReviewFinding
 
 if TYPE_CHECKING:
     from orchestrator.bin.plan_schema import Subtask
@@ -25,13 +25,6 @@ MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = [30, 90, 270]
 MAX_TURNS = 50
 MAX_CONCURRENT_SUBTASKS = 8
-
-@dataclass
-class AgentRunResult:
-    """Mutable wrapper around immutable AgentRun + guardrail findings."""
-    agent_run: AgentRun
-    review_findings: list[ReviewFinding] = field(default_factory=list)
-    token_usage: dict[str, Any] = field(default_factory=dict)
 
 
 class AgentExecutor:
