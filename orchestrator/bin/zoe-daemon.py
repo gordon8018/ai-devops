@@ -517,6 +517,11 @@ def main() -> None:
     print(f"Zoe daemon started. Watching queue: {q}")
     print(f"ProcessGuardian initialized. Monitoring agent sessions...")
 
+    # Track recently-failed queue files to avoid spamming errors every 2s.
+    # File is retried after _QUEUE_RETRY_COOLDOWN_SECS seconds.
+    _failed_files: dict[Path, float] = {}
+    _QUEUE_RETRY_COOLDOWN_SECS = 60
+
     # 资源监控（每 30 秒采集一次）
     try:
         from resource_monitor import get_resource_monitor
@@ -601,13 +606,19 @@ def main() -> None:
             print(f"[GUARDIAN-ERROR] Check failed: {e}")
 
         # 队列处理
+        now = time.time()
         for p in consumer.list_queue_files():
+            # Skip files that failed recently to avoid per-iteration error spam.
+            last_fail = _failed_files.get(p)
+            if last_fail is not None and (now - last_fail) < _QUEUE_RETRY_COOLDOWN_SECS:
+                continue
             try:
                 task = _load_queue_task(consumer, p)
 
                 if get_task(task["id"]) is not None:
                     # 已存在跟踪记录时，删除队列项避免重复循环
                     p.unlink(missing_ok=True)
+                    _failed_files.pop(p, None)
                     continue
 
                 item = spawn_agent(task)
@@ -618,6 +629,7 @@ def main() -> None:
                     guardian.add_task(item["id"], item["tmuxSession"])
 
                 p.unlink(missing_ok=True)
+                _failed_files.pop(p, None)
                 if item["executionMode"] == "tmux":
                     print(f"Spawned task {item['id']} in tmux {item['tmuxSession']}")
                 else:
@@ -625,9 +637,11 @@ def main() -> None:
             except Exception as e:
                 if _is_dead_letter_error(e):
                     _dead_letter_task(p, e)
+                    _failed_files.pop(p, None)
                     print(f"[DEAD-LETTER] Moved invalid task {p} to dead-letter: {e}")
                     continue
-                # 不删除任务文件，保留用于排查与重试
+                # 保留任务文件，60 秒后重试
+                _failed_files[p] = now
                 print(f"[ERROR] Failed processing {p}: {e}")
 
         time.sleep(2)
