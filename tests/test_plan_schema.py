@@ -97,6 +97,7 @@ def test_task_type_enum_values():
     expected = {
         "code_generation", "code_review", "bug_fix", "refactor",
         "documentation", "test_generation", "planning", "incident_analysis",
+        "ui_verification",
     }
     actual = {t.value for t in TaskType}
     assert actual == expected

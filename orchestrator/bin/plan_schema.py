@@ -18,6 +18,7 @@ class TaskType(str, Enum):
     TEST_GENERATION = "test_generation"
     PLANNING = "planning"
     INCIDENT_ANALYSIS = "incident_analysis"
+    UI_VERIFICATION = "ui_verification"
 
 try:
     from .errors import InvalidPlan
