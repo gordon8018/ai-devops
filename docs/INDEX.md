@@ -13,6 +13,7 @@
 1. **阅读顺序**
    - [README.md](../README.md) - 项目概览与 2.0 新能力
    - [Agent SDK 整合设计](./superpowers/specs/2026-04-18-agents-sdk-integration-design.md) - 了解 2.0 架构设计
+   - [对抗审查 + 知识演进 + UI 测试实施计划](../plans/agent-sdk-adversarial-review-knowledge-ui.md) - 2.0.1 Phase 5 设计
    - [架构层级合约](./architecture/layer-contracts.md) - 七层架构契约
    - [RALPH_ARCHITECTURE.md](./RALPH_ARCHITECTURE.md) - 了解遗留系统架构
    - [TASK_SPEC_TEMPLATE.md](./TASK_SPEC_TEMPLATE.md) - 查看任务模板
@@ -32,6 +33,8 @@
 |------|------|----------|
 | [RALPH_ARCHITECTURE.md](./RALPH_ARCHITECTURE.md) | 系统整体架构和设计原则 | 所有人 |
 | [RALPH_INTEGRATION.md](./RALPH_INTEGRATION.md) | 集成快速入门和示例 | 开发者、运维 |
+| [Agent SDK 整合设计规格](./superpowers/specs/2026-04-18-agents-sdk-integration-design.md) | 2.0 Agent SDK 层架构设计 | 平台开发者 |
+| [对抗审查 + 知识演进 + UI 测试](../plans/agent-sdk-adversarial-review-knowledge-ui.md) | 2.0.1 Phase 5 实施计划 | 平台开发者 |
 
 ---
 
@@ -289,11 +292,13 @@
 
 ### 最新更新
 
+- **2026-05-08**: 2.0.1 Phase 5 — 轮转对抗审查、CLAUDE.md 自演进、UI 视觉测试（948 测试通过）
+- **2026-04-18**: 2.0 Agent SDK 整合层完成（Phase 1–4）
 - **2026-04-14**: 创建完整文档体系
-- 架构文档（8 个组件）
-- API 参考（Python、REST、CLI）
-- 运维文档（部署、配置、监控、故障排查、备份）
-- 最佳实践（TaskSpec、PRD、Code Review、知识管理）
+  - 架构文档（8 个组件）
+  - API 参考（Python、REST、CLI）
+  - 运维文档（部署、配置、监控、故障排查、备份）
+  - 最佳实践（TaskSpec、PRD、Code Review、知识管理）
 
 ---
 

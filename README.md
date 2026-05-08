@@ -1,7 +1,7 @@
 # AI-DevOps 2.0
 
 [![CI](https://github.com/gordon8018/ai-devops/actions/workflows/ci.yml/badge.svg)](https://github.com/gordon8018/ai-devops/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/pytest-812%20passed%20%7C%201%20skipped-brightgreen.svg)](./docs/TEST_COVERAGE.md)
+[![Tests](https://img.shields.io/badge/pytest-948%20passed%20%7C%201%20skipped-brightgreen.svg)](./docs/TEST_COVERAGE.md)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://python.org)
 [![Agents SDK](https://img.shields.io/badge/OpenAI%20Agents%20SDK-0.14%2B-green.svg)](https://github.com/openai/openai-agents-python)
@@ -23,6 +23,7 @@
 - 支持 **OpenAI + Anthropic 双提供商**，基于任务类型自动路由
 - 引入运行时护栏（Prompt 注入检测、密钥泄漏扫描、路径边界强制）
 - 统一的 Token 用量追踪与成本估算
+- **[2.0.1 新增]** 轮转对抗审查、CLAUDE.md 自演进、UI 视觉测试
 
 ---
 
@@ -64,10 +65,45 @@
 
 | 能力 | 说明 |
 |------|------|
-| **AgentTraceBridge** | SDK 追踪事件映射到 EventBus（10 种事件类型） |
+| **AgentTraceBridge** | SDK 追踪事件映射到 EventBus（20 种事件类型） |
 | **敏感数据控制** | 可关闭 LLM 输入/输出原文传输 |
 | **TokenUsageCollector** | Token 用量提取 + 成本估算 + 多运行聚合 |
 | **ReviewFinding** | 护栏结果转化为结构化审查发现 |
+
+### 轮转对抗审查（Phase 5）
+
+多模型轮转担任实现者与审查者，利用跨提供商盲区互补提升代码质量。
+
+| 能力 | 说明 |
+|------|------|
+| **AdversarialReviewOrchestrator** | 实现→审查→评分循环，最多 5 轮，通过即终止 |
+| **轮转审查者** | Anthropic Opus → Sonnet → OpenAI GPT 轮流审查，排除与实现者相同的提供商 |
+| **ReviewScorer** | 5 种 regex 级联解析 LLM 评分 + `ADVERSARIAL_RESULT` 哨兵机制 |
+| **停滞检测** | N 轮连续无提升则提前退出，避免无效重试 |
+| **二阶注入防护** | 审查者输出经 `PromptInjectionGuard` 扫描后才注入实现者 prompt |
+
+### CLAUDE.md 自演进（Phase 5）
+
+Agent 成功执行后自动将可复用知识写入项目 CLAUDE.md，形成跨 WorkItem 知识积累飞轮。
+
+| 能力 | 说明 |
+|------|------|
+| **KnowledgeExtractor** | LLM 提取 patterns / gotchas / decisions（单轮，cap 5 条/150 字） |
+| **ClaudeMDWriter** | `asyncio.Lock` 按路径加锁 + `tempfile`+`os.replace` 原子写入 + 50KB 归档轮转 |
+| **内容去重** | SHA-256 哈希检测重复条目，拒绝写入 |
+| **路径安全** | workspace_path 系统目录黑名单校验，拒绝越界写入 |
+
+### UI 视觉测试（Phase 5）
+
+自动探测开发服务器、截图、LLM 视觉验证，适用于 `ui_verification` 任务类型。
+
+| 能力 | 说明 |
+|------|------|
+| **ServerDetector** | 10 种框架探测（Node/Vite/Next/Django/Flask/FastAPI/Rust/Go 等） |
+| **ServerManager** | 异步就绪轮询，`CancelledError` 安全清理，`asyncio.to_thread` 非阻塞停止 |
+| **ScreenshotCapture** | Playwright → Chromium CLI → Chrome → Chrome headless 4 级 cascade |
+| **VisualVerifier** | Anthropic 视觉调用，256KB 压缩上限，score+sentinel 解析 |
+| **UITestOrchestrator** | 全流程编排，发布 5 种 UI 测试事件 |
 
 ---
 
@@ -89,12 +125,12 @@
 pytest -q
 ```
 
-- `812 passed`
+- `948 passed`
 - `1 skipped`
 - `3 warnings`
-- 耗时：`~38s`
+- 耗时：`~40s`
 
-其中 Agent SDK 相关测试：**50 个验收测试 + 23 个单元/集成测试**。
+其中 Agent SDK 相关测试：**86 个单元/集成测试**（adversarial review 29 个、knowledge evolver 18 个、UI testing 23 个、executor wiring 16 个）。
 
 ---
 
@@ -141,6 +177,8 @@ pytest -q
 | test_generation | OpenAI | gpt-5.4-mini |
 | planning | Anthropic | claude-opus-4-6 |
 | incident_analysis | Anthropic | claude-opus-4-6 |
+| **ui_verification** | **Anthropic** | **claude-opus-4-6**（需要视觉能力） |
+| **adversarial_review** | **Anthropic** | **claude-opus-4-6**（深度推理审查者） |
 
 路由表可通过环境变量覆盖，如 `ROUTE_CODE_GENERATION=anthropic:claude-opus-4-6`。
 
@@ -182,6 +220,9 @@ packages/       平台包与领域实现
     tools/      FunctionTool 注册表 / MCP Server
     guardrails/ 输入/输出护栏
     tracing/    事件桥接 / Token 用量采集
+    review/     轮转对抗审查（AdversarialReviewOrchestrator / ReviewScorer）
+    knowledge/  CLAUDE.md 自演进（KnowledgeEvolver / ClaudeMDWriter）
+    ui_testing/ UI 视觉测试（ServerDetector / ScreenshotCapture / VisualVerifier）
 orchestrator/   兼容层与已验证内核
 infra/          Docker / GitHub Actions / Terraform / K8s
 docs/           架构、运行手册、API、最佳实践
@@ -194,33 +235,50 @@ tests/          主测试集（812+ 测试）
 
 ## 关键执行路径
 
-### 路径 1：SDK Agent 执行（2.0 推荐）
+### 路径 1：带对抗审查的 SDK 执行（2.0 推荐）
 
 ```text
 WorkItem payload
   -> console_api / WorkItemService
   -> ContextPackAssembler.build()
+  -> AgentExecutor.execute_with_review()
+       ├─ Input Guardrails (BoundaryGuard, PromptInjectionGuard) [全任务类型]
+       ├─ [ui_verification] → UITestOrchestrator
+       │     ServerDetector → ServerManager → ScreenshotCapture → VisualVerifier
+       └─ [其他任务类型] → AdversarialReviewOrchestrator
+             for round in max_rounds:
+               AgentExecutor._run_agent_once(impl_model)   ← 受 Semaphore 保护
+               _run_reviewer(reviewer_model, prior_review) ← 独立 Semaphore
+               ReviewScorer.parse() → passed? break : stall_check
+             → AgentRunResult (COMPLETED / FAILED + all_findings + token_usage)
+  -> [成功] asyncio.create_task(KnowledgeEvolver.evolve())  ← 后台任务
+       KnowledgeExtractor → PromptInjectionGuard → ClaudeMDWriter(原子写入)
+  -> EventBus (20 种事件类型)
+  -> TokenUsageCollector.aggregate()
+```
+
+### 路径 2：单次 SDK 执行（兼容）
+
+```text
+WorkItem payload
   -> Input Guardrails (BoundaryGuard, PromptInjectionGuard)
   -> AgentFactory.build(subtask, context_pack)
        tools=ToolRegistry.resolve(task_type)
        model=ModelRouter.resolve(task_type)
   -> AgentExecutor.execute()
-       Runner.run(agent, context=run_context)
-       retry + escalation on failure
-  -> Output Guardrails (SecretLeakGuard, ForbiddenPathGuard)
-  -> AgentRunResult (AgentRun + ReviewFindings + token_usage)
-  -> EventBus (agent_run.started / completed / failed)
-  -> TokenUsageCollector.aggregate()
+       per-attempt: async with semaphore → Runner.run()
+       MaxTurnsExceeded → escalate model; Exception → backoff sleep (semaphore released)
+  -> AgentRunResult (AgentRun + token_usage)
 ```
 
-### 路径 2：Legacy Zoe 入口（兼容）
+### 路径 3：Legacy Zoe 入口（兼容）
 
 ```text
 task input -> zoe_tool_api -> planner_engine -> dispatch
   -> zoe-daemon -> agent runner -> monitor -> console
 ```
 
-### 路径 3：发布与事故闭环
+### 路径 4：发布与事故闭环
 
 ```text
 task_status=ready -> ReleaseWorker -> rollout/rollback
@@ -320,6 +378,7 @@ npm run dev
 - [平台引导](./docs/architecture/platform-bootstrap.md)
 - [Agent SDK 整合设计规格](./docs/superpowers/specs/2026-04-18-agents-sdk-integration-design.md)
 - [Agent SDK 实施计划](./docs/superpowers/plans/2026-04-18-agents-sdk-integration.md)
+- [对抗审查 + 知识演进 + UI 测试实施计划](./plans/agent-sdk-adversarial-review-knowledge-ui.md)
 
 ### API 与运维
 
