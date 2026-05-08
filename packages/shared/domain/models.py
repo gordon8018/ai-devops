@@ -225,6 +225,14 @@ class ReviewFinding:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class AgentRunResult:
+    """Mutable wrapper around an AgentRun with guardrail findings and token usage."""
+    agent_run: AgentRun
+    review_findings: list[ReviewFinding] = field(default_factory=list)
+    token_usage: dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass(slots=True, frozen=True)
 class AuditEvent:
     audit_event_id: str

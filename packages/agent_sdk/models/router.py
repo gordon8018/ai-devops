@@ -13,6 +13,8 @@ TASK_ROUTE_TABLE: dict[str, tuple[str, str]] = {
     "test_generation": ("openai", "gpt-5.4-mini"),
     "planning": ("anthropic", "claude-opus-4-6"),
     "incident_analysis": ("anthropic", "claude-opus-4-6"),
+    "ui_verification": ("anthropic", "claude-opus-4-6"),     # vision capability required
+    "adversarial_review": ("anthropic", "claude-opus-4-6"),  # deep reasoning reviewer
 }
 
 DEFAULT_ROUTE: tuple[str, str] = ("openai", "gpt-5.4")
