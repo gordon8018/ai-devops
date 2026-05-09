@@ -1,6 +1,6 @@
 import { StatusBadge } from "./status-badge";
 
-type TimelineEvent = {
+export type TimelineEvent = {
   type?: unknown;
   source?: unknown;
   timestamp?: unknown;

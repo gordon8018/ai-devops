@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 
 const PASSWORD = process.env.CONSOLE_PASSWORD;
 const COOKIE_NAME = "console_auth";

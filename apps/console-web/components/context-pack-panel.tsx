@@ -1,4 +1,4 @@
-type ContextPack = {
+export type ContextPack = {
   packId?: unknown;
   fileHints?: unknown;
   acceptanceCriteria?: unknown;
