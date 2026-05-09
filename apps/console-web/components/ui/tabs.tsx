@@ -3,10 +3,18 @@
 import { createContext, type ReactNode, useContext, useState } from "react";
 import { cn } from "../../lib/cn";
 
-const TabsContext = createContext<{ active: string; setActive: (v: string) => void }>({
-  active: "",
-  setActive: () => {},
-});
+interface TabsContextValue {
+  active: string;
+  setActive: (v: string) => void;
+}
+
+const TabsContext = createContext<TabsContextValue | null>(null);
+
+function useTabsContext(): TabsContextValue {
+  const ctx = useContext(TabsContext);
+  if (!ctx) throw new Error("TabsTrigger/TabsContent must be used inside <Tabs>");
+  return ctx;
+}
 
 export function Tabs({
   defaultValue,
@@ -26,16 +34,19 @@ export function Tabs({
 }
 
 export function TabsList({ children }: { children: ReactNode }) {
-  return <div className="tabs-list">{children}</div>;
+  return <div role="tablist" className="tabs-list">{children}</div>;
 }
 
 export function TabsTrigger({ value, children }: { value: string; children: ReactNode }) {
-  const { active, setActive } = useContext(TabsContext);
+  const { active, setActive } = useTabsContext();
   return (
     <button
+      id={`tab-${value}`}
       type="button"
+      role="tab"
       className="tabs-trigger"
       aria-selected={active === value}
+      aria-controls={`panel-${value}`}
       onClick={() => setActive(value)}
     >
       {children}
@@ -44,9 +55,16 @@ export function TabsTrigger({ value, children }: { value: string; children: Reac
 }
 
 export function TabsContent({ value, children }: { value: string; children: ReactNode }) {
-  const { active } = useContext(TabsContext);
+  const { active } = useTabsContext();
   return (
-    <div className="tabs-content" data-active={active === value ? "true" : "false"}>
+    <div
+      id={`panel-${value}`}
+      role="tabpanel"
+      aria-labelledby={`tab-${value}`}
+      tabIndex={0}
+      className="tabs-content"
+      data-active={active === value ? "true" : "false"}
+    >
       {children}
     </div>
   );
