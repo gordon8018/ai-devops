@@ -1,5 +1,4 @@
 import { DataTable, WorkspaceLink } from "../../components/data-table";
-import { ErrorBanner } from "../../components/error-banner";
 import { Panel } from "../../components/panel";
 import { RefreshButton } from "../../components/refresh-button";
 import { StatusBadge } from "../../components/status-badge";
@@ -20,7 +19,7 @@ function StepsProgress({
     <span style={{ fontSize: "12px", color: "var(--muted)" }}>
       {planned.map((step, i) => (
         <span
-          key={i}
+          key={step}
           style={{
             marginRight: "4px",
             fontWeight: i <= doneIdx ? 700 : 400,
@@ -45,14 +44,6 @@ export default async function AgentRunsPage() {
         <p>查看所有 AgentRun 记录，包含执行模型、状态和计划步骤进度。</p>
         <RefreshButton />
       </header>
-
-      <ErrorBanner
-        message={
-          runs.length === 0
-            ? "当前没有 Agent Run 数据。任务执行后将显示在此处。"
-            : null
-        }
-      />
 
       <Panel title="Agent Runs" eyebrow={`${runs.length} runs`}>
         <DataTable
@@ -84,7 +75,7 @@ export default async function AgentRunsPage() {
                       ? (row.plannedSteps as string[])
                       : []
                   }
-                  current={String(row.currentStep ?? "")}
+                  current={row.currentStep != null ? String(row.currentStep) : undefined}
                 />
               ),
             },

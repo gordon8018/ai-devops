@@ -11,13 +11,14 @@ export function getApiBaseUrl(): string {
 
 async function fetchJson<T>(path: string): Promise<T | null> {
   try {
-    const response = await fetch(buildConsoleApiUrl(DEFAULT_BASE_URL, path), {
+    const response = await fetch(buildConsoleApiUrl(getApiBaseUrl(), path), {
       cache: "no-store",
     });
     if (!response.ok) return null;
     const payload = await response.json();
     return (payload?.data ?? null) as T | null;
-  } catch {
+  } catch (err) {
+    console.error("[console-api] fetchJson failed:", err);
     return null;
   }
 }
@@ -78,7 +79,7 @@ export async function createWorkItem(
   payload: CreateWorkItemPayload
 ): Promise<CreateWorkItemResult> {
   try {
-    const res = await fetch(`${getApiBaseUrl()}/api/work-items`, {
+    const res = await fetch(buildConsoleApiUrl(getApiBaseUrl(), "/api/work-items"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
