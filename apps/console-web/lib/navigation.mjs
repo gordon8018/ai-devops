@@ -1,6 +1,7 @@
 export const consoleNavItems = [
   { id: "mission-control", label: "Mission Control", href: "/" },
   { id: "task-workspace", label: "Task Workspace", href: "/work-items" },
+  { id: "agent-runs", label: "Agent Runs", href: "/agent-runs" },
   { id: "releases", label: "Release Console", href: "/releases" },
   { id: "incidents", label: "Incident Console", href: "/incidents" },
   { id: "evals", label: "Eval Console", href: "/evals" },

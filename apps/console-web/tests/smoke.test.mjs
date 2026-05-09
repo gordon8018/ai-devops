@@ -18,6 +18,7 @@ test("all expected page routes exist", () => {
     "",
     "work-items",
     "work-items/[workItemId]",
+    "agent-runs",
     "releases",
     "incidents",
     "evals",

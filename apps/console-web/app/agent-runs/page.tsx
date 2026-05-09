@@ -1,0 +1,96 @@
+import { DataTable, WorkspaceLink } from "../../components/data-table";
+import { ErrorBanner } from "../../components/error-banner";
+import { Panel } from "../../components/panel";
+import { RefreshButton } from "../../components/refresh-button";
+import { StatusBadge } from "../../components/status-badge";
+import { getAgentRuns } from "../../lib/console-api";
+
+export const dynamic = "force-dynamic";
+
+function StepsProgress({
+  planned,
+  current,
+}: {
+  planned: string[];
+  current?: string;
+}) {
+  if (planned.length === 0) return <span className="subtle">—</span>;
+  const doneIdx = current ? planned.indexOf(current) : -1;
+  return (
+    <span style={{ fontSize: "12px", color: "var(--muted)" }}>
+      {planned.map((step, i) => (
+        <span
+          key={i}
+          style={{
+            marginRight: "4px",
+            fontWeight: i <= doneIdx ? 700 : 400,
+            color: i <= doneIdx ? "var(--accent)" : "var(--muted)",
+          }}
+        >
+          {i < planned.length - 1 ? `${step} →` : step}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+export default async function AgentRunsPage() {
+  const runs = await getAgentRuns();
+
+  return (
+    <div className="page">
+      <header className="page-header">
+        <span className="page-kicker">Execution</span>
+        <h1>Agent Runs</h1>
+        <p>查看所有 AgentRun 记录，包含执行模型、状态和计划步骤进度。</p>
+        <RefreshButton />
+      </header>
+
+      <ErrorBanner
+        message={
+          runs.length === 0
+            ? "当前没有 Agent Run 数据。任务执行后将显示在此处。"
+            : null
+        }
+      />
+
+      <Panel title="Agent Runs" eyebrow={`${runs.length} runs`}>
+        <DataTable
+          rows={runs}
+          emptyText="当前没有 Agent Run 记录。"
+          columns={[
+            { key: "runId", label: "Run ID" },
+            {
+              key: "workItemId",
+              label: "Work Item",
+              render: (row) => (
+                <WorkspaceLink workItemId={String(row.workItemId ?? "")} />
+              ),
+            },
+            { key: "agent", label: "Agent" },
+            { key: "model", label: "Model" },
+            {
+              key: "status",
+              label: "Status",
+              render: (row) => <StatusBadge status={String(row.status ?? "-")} />,
+            },
+            {
+              key: "plannedSteps",
+              label: "Steps",
+              render: (row) => (
+                <StepsProgress
+                  planned={
+                    Array.isArray(row.plannedSteps)
+                      ? (row.plannedSteps as string[])
+                      : []
+                  }
+                  current={String(row.currentStep ?? "")}
+                />
+              ),
+            },
+          ]}
+        />
+      </Panel>
+    </div>
+  );
+}
