@@ -59,7 +59,7 @@ export default async function TaskWorkspaceDetailPage({
           <span className="subtle">repo: {String(workItem.repo ?? "-")}</span>
           {planId ? (
             <Link href={`/plans/${encodeURIComponent(planId)}`} className="inline-link">
-              → Plan {planId.slice(0, 20)}…
+              {planId.length > 20 ? `→ Plan ${planId.slice(0, 20)}…` : `→ Plan ${planId}`}
             </Link>
           ) : null}
         </div>

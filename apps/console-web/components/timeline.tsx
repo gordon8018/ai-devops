@@ -8,8 +8,9 @@ export type TimelineEvent = {
 };
 
 function formatTimestamp(ts: unknown): string {
+  if (ts == null || ts === "") return "";
   const n = Number(ts);
-  if (!n) return "";
+  if (Number.isNaN(n)) return "";
   return new Date(n).toLocaleString("zh-CN", { hour12: false });
 }
 
@@ -35,7 +36,7 @@ export function Timeline({
           (event.data as Record<string, unknown>)?.status ?? ""
         );
         return (
-          <li key={i} className="timeline-entry">
+          <li key={`${String(event.timestamp ?? i)}-${String(event.type ?? "")}`} className="timeline-entry">
             <div className="timeline-dot" />
             <div className="timeline-entry-body">
               <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>

@@ -1,4 +1,3 @@
-import { ErrorBanner } from "../../../components/error-banner";
 import { Panel } from "../../../components/panel";
 import { RefreshButton } from "../../../components/refresh-button";
 import { StatusBadge } from "../../../components/status-badge";
@@ -65,8 +64,6 @@ export default async function PlanDetailPage({
         <RefreshButton />
       </header>
 
-      <ErrorBanner message={null} />
-
       <Panel title="Objective" eyebrow="Goal">
         <p style={{ margin: 0, lineHeight: 1.6 }}>{objective}</p>
       </Panel>
@@ -98,7 +95,7 @@ export default async function PlanDetailPage({
                   ) : null}
                   {Array.isArray(step.depends_on) && step.depends_on.length > 0 ? (
                     <p className="plan-step-description">
-                      depends on: {(step.depends_on as string[]).join(", ")}
+                      depends on: {(step.depends_on as unknown[]).map(String).join(", ")}
                     </p>
                   ) : null}
                 </div>

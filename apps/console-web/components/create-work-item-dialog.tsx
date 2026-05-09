@@ -35,15 +35,20 @@ export function CreateWorkItemDialog() {
     }
     setError(null);
     setLoading(true);
-    const result = await createWorkItem(form);
-    setLoading(false);
-    if (!result.success) {
-      setError(result.error ?? "创建失败");
-      return;
+    try {
+      const result = await createWorkItem(form);
+      if (!result.success) {
+        setError(result.error ?? "创建失败");
+        return;
+      }
+      setOpen(false);
+      setForm(EMPTY_FORM);
+      router.refresh();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "提交失败");
+    } finally {
+      setLoading(false);
     }
-    setOpen(false);
-    setForm(EMPTY_FORM);
-    router.refresh();
   }
 
   return (
