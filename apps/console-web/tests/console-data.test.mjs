@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import {
   autoRefreshLabel,
@@ -100,6 +102,15 @@ test("autoRefresh helpers expose default options and labels", () => {
   assert.deepEqual(autoRefreshOptions, [15000, 30000, 60000]);
   assert.equal(autoRefreshLabel(true, 15000), "自动刷新 15s");
   assert.equal(autoRefreshLabel(false, 15000), "自动刷新已暂停");
+});
+
+test("console-api exports createWorkItem, getApiBaseUrl, getAgentRuns, getPlanDetail", () => {
+  const root = new URL("..", import.meta.url).pathname;
+  const src = readFileSync(join(root, "lib", "console-api.ts"), "utf8");
+  assert.ok(src.includes("export function getApiBaseUrl"), "getApiBaseUrl must be exported");
+  assert.ok(src.includes("export async function createWorkItem"), "createWorkItem must be exported");
+  assert.ok(src.includes("export async function getAgentRuns"), "getAgentRuns must be exported");
+  assert.ok(src.includes("export async function getPlanDetail"), "getPlanDetail must be exported");
 });
 
 test("evalGovernanceCards summarizes legacy cutover signals", () => {
