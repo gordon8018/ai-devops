@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,8 +11,7 @@ test("button.tsx exists", () => {
   assert.ok(existsSync(path), "components/ui/button.tsx must exist");
 });
 
-test("button.tsx exports Button (source check)", async () => {
-  const { readFileSync } = await import("node:fs");
+test("button.tsx exports Button (source check)", () => {
   const src = readFileSync(
     resolve(__dirname, "../components/ui/button.tsx"),
     "utf8"
