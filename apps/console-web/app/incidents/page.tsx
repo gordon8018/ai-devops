@@ -28,7 +28,7 @@ export default async function IncidentsPage() {
       <Panel title="Severity Summary" eyebrow="Triage">
         <div className="pill-row">
           <span className="pill">Total: {String(data.total ?? 0)}</span>
-          {Object.entries((data.bySeverity as Record<string, number>) ?? {}).map(([severity, count]) => (
+          {Object.entries((data.bySeverity ?? {}) as Record<string, number>).map(([severity, count]) => (
             <span key={severity} style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
               <StatusBadge status={severity} />
               <span className="subtle">{count}</span>

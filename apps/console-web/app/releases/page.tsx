@@ -28,7 +28,7 @@ export default async function ReleasesPage() {
       <Panel title="Release Summary" eyebrow="Overview">
         <div className="pill-row">
           <span className="pill">Total: {String(data.total ?? 0)}</span>
-          {Object.entries((data.byStatus as Record<string, number>) ?? {}).map(([status, count]) => (
+          {Object.entries((data.byStatus ?? {}) as Record<string, number>).map(([status, count]) => (
             <span key={status} style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
               <StatusBadge status={status} />
               <span className="subtle">{count}</span>

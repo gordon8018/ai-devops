@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { Badge, type BadgeVariant } from "./ui/badge";
 
 const STATUS_MAP: Record<string, BadgeVariant> = {
@@ -20,7 +21,7 @@ const STATUS_MAP: Record<string, BadgeVariant> = {
   rollback:  "critical",
 };
 
-export function StatusBadge({ status }: { status: string }) {
+export function StatusBadge({ status }: { status: string }): JSX.Element {
   const lower = status.toLowerCase();
   const variant = STATUS_MAP[lower] ?? "default";
   return <Badge variant={variant}>{status}</Badge>;
