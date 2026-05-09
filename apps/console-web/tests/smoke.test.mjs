@@ -19,6 +19,7 @@ test("all expected page routes exist", () => {
     "work-items",
     "work-items/[workItemId]",
     "agent-runs",
+    "plans/[planId]",
     "releases",
     "incidents",
     "evals",
@@ -54,4 +55,17 @@ test("StatusBadge component exists", () => {
     existsSync(join(root, "components", "status-badge.tsx")),
     "status-badge.tsx must exist"
   );
+});
+
+test("Phase 7 components exist", () => {
+  const components = [
+    "create-work-item-dialog",
+    "timeline",
+    "context-pack-panel",
+    "polling-wrapper",
+  ];
+  for (const name of components) {
+    const path = join(root, "components", `${name}.tsx`);
+    assert.ok(existsSync(path), `${name}.tsx must exist`);
+  }
 });
