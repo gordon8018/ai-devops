@@ -22,7 +22,7 @@ export function Dialog({ onClose, children, titleId }: DialogProps) {
     previousFocus.current = document.activeElement;
     const panel = panelRef.current;
     const first = panel?.querySelector<HTMLElement>(FOCUSABLE);
-    first?.focus();
+    (first ?? panel)?.focus();
 
     function handleKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
@@ -58,6 +58,7 @@ export function Dialog({ onClose, children, titleId }: DialogProps) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        tabIndex={-1}
       >
         {children}
       </div>

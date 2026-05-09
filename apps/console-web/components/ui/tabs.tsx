@@ -56,14 +56,16 @@ export function TabsTrigger({ value, children }: { value: string; children: Reac
 
 export function TabsContent({ value, children }: { value: string; children: ReactNode }) {
   const { active } = useTabsContext();
+  const isActive = active === value;
   return (
     <div
       id={`panel-${value}`}
       role="tabpanel"
       aria-labelledby={`tab-${value}`}
-      tabIndex={0}
+      tabIndex={isActive ? 0 : -1}
+      hidden={!isActive}
       className="tabs-content"
-      data-active={active === value ? "true" : "false"}
+      data-active={isActive ? "true" : "false"}
     >
       {children}
     </div>
