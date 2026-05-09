@@ -333,3 +333,32 @@ a {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── UI Components ─────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 10px 18px;
+  font: inherit;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: opacity 150ms ease, background 150ms ease, border-color 150ms ease;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.btn:disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
+.btn-default  { background: var(--accent); color: white; }
+.btn-default:hover:not(:disabled) { opacity: 0.88; }
+.btn-outline  { background: transparent; border-color: var(--line); color: var(--text); }
+.btn-outline:hover:not(:disabled) { background: var(--surface); }
+.btn-ghost    { background: transparent; color: var(--text); border-color: transparent; }
+.btn-ghost:hover:not(:disabled) { background: var(--surface); }
+.btn-destructive { background: rgba(220,38,38,0.88); color: white; }
+.btn-destructive:hover:not(:disabled) { opacity: 0.88; }
+.btn-sm { padding: 6px 12px; font-size: 13px; }
+.btn-lg { padding: 14px 26px; font-size: 16px; }
