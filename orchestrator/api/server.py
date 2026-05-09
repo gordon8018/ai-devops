@@ -22,12 +22,14 @@ try:
     from .health import create_health_handler
     from .console import create_console_handler
     from .work_items import create_work_items_handler
+    from .agent_runs import create_agent_runs_handler
 except ImportError:
     from tasks import create_tasks_handler
     from plans import create_plans_handler
     from health import create_health_handler
     from console import create_console_handler
     from work_items import create_work_items_handler
+    from agent_runs import create_agent_runs_handler
 
 # Import WebSocket and Events
 try:
@@ -83,6 +85,7 @@ def create_combined_handler() -> type:
     handler = create_tasks_handler(handler)
     handler = create_plans_handler(handler)
     handler = create_health_handler(handler)
+    handler = create_agent_runs_handler(handler)
     return handler
 
 
