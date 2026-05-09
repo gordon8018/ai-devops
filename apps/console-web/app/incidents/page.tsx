@@ -2,6 +2,7 @@ import { DataTable } from "../../components/data-table";
 import { ErrorBanner } from "../../components/error-banner";
 import { Panel } from "../../components/panel";
 import { RefreshButton } from "../../components/refresh-button";
+import { StatusBadge } from "../../components/status-badge";
 import { getIncidentConsole } from "../../lib/console-api";
 import { resourceErrorMessage } from "../../lib/console-data.mjs";
 
@@ -28,8 +29,9 @@ export default async function IncidentsPage() {
         <div className="pill-row">
           <span className="pill">Total: {String(data.total ?? 0)}</span>
           {Object.entries((data.bySeverity as Record<string, number>) ?? {}).map(([severity, count]) => (
-            <span className="pill" key={severity}>
-              {severity}: {count}
+            <span key={severity} style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+              <StatusBadge status={severity} />
+              <span className="subtle">{count}</span>
             </span>
           ))}
         </div>
@@ -41,8 +43,16 @@ export default async function IncidentsPage() {
           emptyText="当前没有 incident 数据。"
           columns={[
             { key: "incidentId", label: "Incident" },
-            { key: "severity", label: "Severity" },
-            { key: "status", label: "Status" },
+            {
+              key: "severity",
+              label: "Severity",
+              render: (row) => <StatusBadge status={String(row.severity ?? "-")} />,
+            },
+            {
+              key: "status",
+              label: "Status",
+              render: (row) => <StatusBadge status={String(row.status ?? "-")} />,
+            },
             { key: "message", label: "Message" },
           ]}
         />

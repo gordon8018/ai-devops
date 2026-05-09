@@ -2,6 +2,7 @@ import { DataTable, WorkspaceLink } from "../../components/data-table";
 import { ErrorBanner } from "../../components/error-banner";
 import { Panel } from "../../components/panel";
 import { RefreshButton } from "../../components/refresh-button";
+import { StatusBadge } from "../../components/status-badge";
 import { getWorkItems } from "../../lib/console-api";
 
 export const dynamic = "force-dynamic";
@@ -39,7 +40,11 @@ export default async function WorkItemsPage() {
             },
             { key: "title", label: "Title" },
             { key: "repo", label: "Repo" },
-            { key: "status", label: "Status" },
+            {
+              key: "status",
+              label: "Status",
+              render: (row) => <StatusBadge status={String(row.status ?? "-")} />,
+            },
             { key: "contextPackId", label: "Context Pack" },
           ]}
         />

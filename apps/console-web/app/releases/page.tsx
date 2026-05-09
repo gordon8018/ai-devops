@@ -2,6 +2,7 @@ import { DataTable, WorkspaceLink } from "../../components/data-table";
 import { ErrorBanner } from "../../components/error-banner";
 import { Panel } from "../../components/panel";
 import { RefreshButton } from "../../components/refresh-button";
+import { StatusBadge } from "../../components/status-badge";
 import { getReleaseConsole } from "../../lib/console-api";
 import { resourceErrorMessage } from "../../lib/console-data.mjs";
 
@@ -28,8 +29,9 @@ export default async function ReleasesPage() {
         <div className="pill-row">
           <span className="pill">Total: {String(data.total ?? 0)}</span>
           {Object.entries((data.byStatus as Record<string, number>) ?? {}).map(([status, count]) => (
-            <span className="pill" key={status}>
-              {status}: {count}
+            <span key={status} style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+              <StatusBadge status={status} />
+              <span className="subtle">{count}</span>
             </span>
           ))}
         </div>
@@ -46,7 +48,11 @@ export default async function ReleasesPage() {
               label: "Work Item",
               render: (row) => <WorkspaceLink workItemId={String(row.workItemId ?? "")} />,
             },
-            { key: "status", label: "Status" },
+            {
+              key: "status",
+              label: "Status",
+              render: (row) => <StatusBadge status={String(row.status ?? "-")} />,
+            },
             { key: "stage", label: "Stage" },
           ]}
         />
