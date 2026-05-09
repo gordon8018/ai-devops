@@ -13,7 +13,7 @@ def _json_response(data: Any, status: int = 200) -> tuple[bytes, int, str]:
 
 
 class AgentRunsAPIHandler:
-    def handle_get_agent_runs(self):
+    def handle_get_agent_runs(self) -> tuple[bytes, int, str]:
         runs = list_agent_runs()
         return _json_response({"success": True, "data": runs, "count": len(runs)})
 
@@ -39,6 +39,7 @@ def create_agent_runs_handler(base_handler: type) -> type:
                 self.send_response(204)
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type")
                 self.end_headers()
 
     return CombinedHandler

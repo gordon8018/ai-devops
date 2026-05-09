@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import threading
+
 from packages.shared.domain.control_plane import ensure_control_plane_store
-from packages.shared.domain.models import AuditEvent, EvalRun
+from packages.shared.domain.models import AgentRun, AuditEvent, EvalRun
 
 _AUDIT_EVENTS: list[dict] = []
 _EVAL_RUNS: list[dict] = []
 _AGENT_RUNS: list[dict] = []
+_AGENT_RUNS_LOCK = threading.Lock()
 _PERSISTENCE_STORE = None
 
 
@@ -53,19 +56,22 @@ def list_eval_runs() -> list[dict]:
     return list(merged.values())
 
 
-def record_agent_run(agent_run: "AgentRun") -> None:
+def record_agent_run(agent_run: AgentRun) -> None:
     incoming = agent_run.to_dict()
-    filtered = [r for r in _AGENT_RUNS if r.get("runId") != agent_run.run_id]
-    filtered.append(incoming)
-    _AGENT_RUNS.clear()
-    _AGENT_RUNS.extend(filtered)
+    with _AGENT_RUNS_LOCK:
+        filtered = [r for r in _AGENT_RUNS if r.get("runId") != agent_run.run_id]
+        filtered.append(incoming)
+        _AGENT_RUNS.clear()
+        _AGENT_RUNS.extend(filtered)
 
 
 def list_agent_runs() -> list[dict]:
-    return list(_AGENT_RUNS)
+    with _AGENT_RUNS_LOCK:
+        return list(_AGENT_RUNS)
 
 
 def clear_runtime_state() -> None:
     _AUDIT_EVENTS.clear()
     _EVAL_RUNS.clear()
-    _AGENT_RUNS.clear()
+    with _AGENT_RUNS_LOCK:
+        _AGENT_RUNS.clear()
