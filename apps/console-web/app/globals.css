@@ -496,3 +496,12 @@ a {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.3; }
 }
+
+/* Plan steps */
+.plan-steps { display: grid; gap: 12px; padding: 0; list-style: none; }
+.plan-step { display: grid; grid-template-columns: 28px 1fr; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.plan-step:last-child { border-bottom: none; }
+.plan-step-number { display: flex; align-items: flex-start; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 700; flex-shrink: 0; padding-top: 6px; }
+.plan-step-body { display: grid; gap: 4px; }
+.plan-step-title { font-weight: 600; font-size: 14px; }
+.plan-step-description { font-size: 13px; color: var(--muted); }
