@@ -6,26 +6,12 @@ import { getAgentRuns } from "../../lib/console-api";
 
 export const dynamic = "force-dynamic";
 
-function StepsProgress({
-  planned,
-  current,
-}: {
-  planned: string[];
-  current?: string;
-}) {
+function StepsProgress({ planned }: { planned: string[] }) {
   if (planned.length === 0) return <span className="subtle">—</span>;
-  const doneIdx = current ? planned.indexOf(current) : -1;
   return (
     <span style={{ fontSize: "12px", color: "var(--muted)" }}>
       {planned.map((step, i) => (
-        <span
-          key={step}
-          style={{
-            marginRight: "4px",
-            fontWeight: i <= doneIdx ? 700 : 400,
-            color: i <= doneIdx ? "var(--accent)" : "var(--muted)",
-          }}
-        >
+        <span key={`${step}-${i}`} style={{ marginRight: "4px" }}>
           {i < planned.length - 1 ? `${step} →` : step}
         </span>
       ))}
@@ -71,11 +57,11 @@ export default async function AgentRunsPage() {
               render: (row) => (
                 <StepsProgress
                   planned={
-                    Array.isArray(row.plannedSteps)
+                    Array.isArray(row.plannedSteps) &&
+                    row.plannedSteps.every((s) => typeof s === "string")
                       ? (row.plannedSteps as string[])
                       : []
                   }
-                  current={row.currentStep != null ? String(row.currentStep) : undefined}
                 />
               ),
             },

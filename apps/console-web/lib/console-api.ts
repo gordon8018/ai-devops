@@ -1,12 +1,12 @@
 import { buildConsoleApiUrl } from "./console-data.mjs";
 
-const DEFAULT_BASE_URL = process.env.CONSOLE_API_BASE_URL || "http://127.0.0.1:8080";
+const FALLBACK_API_URL = "http://127.0.0.1:8080";
 
 export function getApiBaseUrl(): string {
   if (typeof window !== "undefined") {
-    return process.env.NEXT_PUBLIC_CONSOLE_API_BASE_URL ?? "http://127.0.0.1:8080";
+    return process.env.NEXT_PUBLIC_CONSOLE_API_BASE_URL ?? FALLBACK_API_URL;
   }
-  return DEFAULT_BASE_URL;
+  return process.env.CONSOLE_API_BASE_URL ?? FALLBACK_API_URL;
 }
 
 async function fetchJson<T>(path: string): Promise<T | null> {
@@ -57,7 +57,7 @@ export async function getAgentRuns(): Promise<Array<Record<string, unknown>>> {
   return result ?? [];
 }
 
-export async function getPlanDetail(planId: string) {
+export async function getPlanDetail(planId: string): Promise<Record<string, unknown> | null> {
   return fetchJson<Record<string, unknown>>(`/api/plans/${encodeURIComponent(planId)}`);
 }
 

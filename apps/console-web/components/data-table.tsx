@@ -32,7 +32,7 @@ export function DataTable({
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={String(row.id ?? row.workItemId ?? row.releaseId ?? row.incidentId ?? index)}>
+            <tr key={String(row.id ?? row.runId ?? row.workItemId ?? row.releaseId ?? row.incidentId ?? index)}>
               {columns.map((column) => (
                 <td key={column.key}>
                   {column.render ? column.render(row) : String(row[column.key] ?? "-")}
